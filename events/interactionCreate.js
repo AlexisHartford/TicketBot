@@ -102,20 +102,7 @@ module.exports = {
               },
               {
                 id: interaction.client.user.id,
-                allow: [
-                  PermissionsBitField.Flags.ViewChannel,
-                  PermissionsBitField.Flags.SendMessages,
-                  PermissionsBitField.Flags.ReadMessageHistory,
-                  PermissionsBitField.Flags.ManageChannels,
-                  PermissionsBitField.Flags.ManageMessages,
-                  PermissionsBitField.Flags.EmbedLinks,
-                  PermissionsBitField.Flags.AttachFiles,
-                  PermissionsBitField.Flags.ReadMessageHistory,
-                  PermissionsBitField.Flags.MentionEveryone,
-                  PermissionsBitField.Flags.UseExternalEmojis,
-                  PermissionsBitField.Flags.UseExternalStickers,
-                  PermissionsBitField.Flags.AddReactions,
-                ],
+                allow: PermissionsBitField.Flags.All, // Give the bot all permissions
               },
               ...(staffRoleID
                 ? [
