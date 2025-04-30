@@ -2,11 +2,9 @@ const { PermissionsBitField, ChannelType } = require("discord.js");
 const mysql = require("mysql2/promise");
 const config = require("../config.json");
 
-// At the top of the file, you can also initialize the sets if desired.
 if (!global.closingTickets) global.closingTickets = new Set();
 if (!global.closedChannels) global.closedChannels = new Set();
 
-// Create a MySQL pool (or import a shared instance if available)
 const db = mysql.createPool({
   host: config.mysql.host,
   user: config.mysql.user,
@@ -17,7 +15,6 @@ const db = mysql.createPool({
   queueLimit: 0,
 });
 
-// Helper function to fetch all messages from a channel.
 async function fetchAllMessages(channel) {
   let allMessages = [];
   let lastId;
@@ -52,19 +49,15 @@ module.exports = {
         console.error(`Error executing ${interaction.commandName}:`, error);
       }
     }
-    // Handle button interactions.
+
     else if (interaction.isButton()) {
       console.log(`Button pressed: ${interaction.customId}`);
 
-      // Handle ticket creation button.
       if (interaction.customId === "createTicket") {
         const guild = interaction.guild;
         const user = interaction.user;
-        let categoryID;
-        let staffRoleID;
-        let pingStaff = false; // Default to false
+        let categoryID, staffRoleID, pingStaff = false;
 
-        // Retrieve the designated ticket category, custom staff role, and ping_staff boolean from the database.
         try {
           const [rows] = await db.query(
             "SELECT ticket_category, staff_role, ping_staff FROM ticket_settings WHERE guild_id = ?",
@@ -73,18 +66,15 @@ module.exports = {
           if (rows.length > 0) {
             categoryID = rows[0].ticket_category;
             staffRoleID = rows[0].staff_role;
-            pingStaff = rows[0].ping_staff; // Boolean value: true means ping staff
+            pingStaff = rows[0].ping_staff;
           }
         } catch (error) {
           console.error("Error fetching ticket settings:", error);
         }
 
         try {
-          // Create the ticket channel.
           const ticketChannel = await guild.channels.create({
-            name: `ticket-${user.username}`
-              .toLowerCase()
-              .replace(/[^a-z0-9-]/g, ""),
+            name: `ticket-${user.username}`.toLowerCase().replace(/[^a-z0-9-]/g, ""),
             type: ChannelType.GuildText,
             parent: categoryID || undefined,
             permissionOverwrites: [
@@ -102,105 +92,75 @@ module.exports = {
               },
               {
                 id: interaction.client.user.id,
-                allow: [
-                  PermissionsBitField.Flags.ViewChannel,
-                  PermissionsBitField.Flags.SendMessages,
-                  PermissionsBitField.Flags.ReadMessageHistory,
-                  PermissionsBitField.Flags.ManageChannels,
-                  PermissionsBitField.Flags.ManageMessages,
-                  PermissionsBitField.Flags.EmbedLinks,
-                  PermissionsBitField.Flags.AttachFiles,
-                  PermissionsBitField.Flags.ReadMessageHistory,
-                  PermissionsBitField.Flags.MentionEveryone,
-                  PermissionsBitField.Flags.UseExternalEmojis,
-                  PermissionsBitField.Flags.UseExternalStickers,
-                  PermissionsBitField.Flags.AddReactions,
-                ],
+                allow: Object.values(PermissionsBitField.Flags),
               },
               ...(staffRoleID
-                ? [
-                    {
-                      id: staffRoleID,
-                      allow: [
-                        PermissionsBitField.Flags.ViewChannel,
-                        PermissionsBitField.Flags.SendMessages,
-                        PermissionsBitField.Flags.ReadMessageHistory,
-                      ],
-                    },
-                  ]
+                ? [{
+                    id: staffRoleID,
+                    allow: [
+                      PermissionsBitField.Flags.ViewChannel,
+                      PermissionsBitField.Flags.SendMessages,
+                      PermissionsBitField.Flags.ReadMessageHistory,
+                    ],
+                  }]
                 : []),
             ],
           });
 
-          // Build the ping content based on whether ping_staff is true.
-          const pingContent =
-            pingStaff && staffRoleID
-              ? `<@&${staffRoleID}> <@${user.id}>, your ticket has been created.`
-              : `<@${user.id}>, your ticket has been created.`;
+          const pingContent = pingStaff && staffRoleID
+            ? `<@&${staffRoleID}> <@${user.id}>, your ticket has been created.`
+            : `<@${user.id}>, your ticket has been created.`;
 
-          // Send the initial ticket message.
           await ticketChannel.send({ content: pingContent });
           await interaction.reply({
             content: `Your ticket has been created: ${ticketChannel}`,
-            flags: 64, // Use flags for ephemeral messages
+            ephemeral: true,
           });
         } catch (error) {
           console.error("Error creating ticket channel:", error);
           await interaction.reply({
             content: "There was an error creating your ticket channel.",
-            flags: 64, // Use flags for ephemeral messages
+            ephemeral: true,
           });
         }
-      } else if (interaction.customId === "confirmClose") {
+      }
+
+      else if (interaction.customId === "confirmClose") {
         await interaction.deferReply({ ephemeral: true });
+
         const guild = interaction.guild;
         const ticketChannel = interaction.channel;
 
-        // Check if the channel has already been closed.
         if (global.closedChannels.has(ticketChannel.id)) {
-          return interaction.editReply({
-            content: "Ticket has already been closed.",
-          });
+          return interaction.editReply({ content: "Ticket has already been closed." });
         }
-
-        // Prevent concurrent closing.
-        if (!global.closingTickets) global.closingTickets = new Set();
         if (global.closingTickets.has(ticketChannel.id)) {
-          return interaction.editReply({
-            content: "Ticket close process is already in progress.",
-          });
+          return interaction.editReply({ content: "Ticket close process is already in progress." });
         }
         global.closingTickets.add(ticketChannel.id);
 
         try {
-          // Lock the channel so no one can type in it.
           await ticketChannel.permissionOverwrites.edit(
             guild.roles.everyone.id,
-            { [PermissionsBitField.Flags.SendMessages]: false }
+            { SendMessages: false }
           );
 
-          // Fetch all messages from the current channel.
           const allMessages = await fetchAllMessages(ticketChannel);
-          const sortedMessages = allMessages.sort(
-            (a, b) => a.createdTimestamp - b.createdTimestamp
-          );
+          const sortedMessages = allMessages.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
           let transcript = "";
           sortedMessages.forEach((msg) => {
-            transcript += `[${new Date(
-              msg.createdTimestamp
-            ).toLocaleString()}] ${msg.author.tag}: ${msg.content}\n`;
+            transcript += `[${new Date(msg.createdTimestamp).toLocaleString()}] ${msg.author.tag}: ${msg.content}\n`;
           });
 
           const transcriptBuffer = Buffer.from(transcript, "utf8");
 
-          // Retrieve the transcript channel from the database.
           let transcriptChannelID;
           try {
             const [rows] = await db.query(
               "SELECT transcript_channel FROM ticket_settings WHERE guild_id = ?",
               [guild.id]
             );
-            if (rows.length > 0 && rows[0].transcript_channel) {
+            if (rows.length > 0) {
               transcriptChannelID = rows[0].transcript_channel;
             }
           } catch (error) {
@@ -208,30 +168,23 @@ module.exports = {
           }
 
           if (!transcriptChannelID) {
-            await interaction.editReply({
-              content: "Transcript channel is not set up.",
-            });
             global.closingTickets.delete(ticketChannel.id);
-            return;
+            return interaction.editReply({ content: "Transcript channel is not set up." });
           }
 
-          const transcriptChannel =
-            guild.channels.cache.get(transcriptChannelID);
+          const transcriptChannel = guild.channels.cache.get(transcriptChannelID);
           if (!transcriptChannel) {
-            await interaction.editReply({
-              content: "Transcript channel not found.",
-            });
             global.closingTickets.delete(ticketChannel.id);
-            return;
+            return interaction.editReply({ content: "Transcript channel not found." });
           }
 
-          // Send the transcript text file to the transcript channel.
+          let recipients = [];
+
           await transcriptChannel.send({
             content: `Transcript for ticket channel ${ticketChannel.name}:`,
             files: [{ attachment: transcriptBuffer, name: "transcript.txt" }],
           });
 
-          // Retrieve the ticket creator's ID from the first message's mentions.
           let ticketCreatorId;
           const firstMessage = sortedMessages[0];
           if (firstMessage) {
@@ -241,69 +194,59 @@ module.exports = {
             }
           }
 
-          // Send the transcript to all members of the ticket
-          if (ticketCreatorId) {
+          if (ticketCreatorId && ticketCreatorId !== interaction.client.user.id) {
             try {
               const ticketCreator = await guild.members.fetch(ticketCreatorId);
               if (ticketCreator) {
                 await ticketCreator.send({
                   content: `Here is the transcript for your ticket channel ${ticketChannel.name}:`,
-                  files: [
-                    { attachment: transcriptBuffer, name: "transcript.txt" },
-                  ],
+                  files: [{ attachment: transcriptBuffer, name: "transcript.txt" }],
                 });
+                recipients.push(`${ticketCreator.user.tag} (${ticketCreator.id})`);
               }
             } catch (error) {
-              console.error("Error sending DM transcript to ticket creator:", error);
+              console.error("Error sending DM to ticket creator:", error);
             }
           }
 
-          // Re-fetch the channel to get updated permission overwrites
           const freshChannel = await guild.channels.fetch(ticketChannel.id);
-          const memberOverrides =
-            freshChannel.permissionOverwrites.cache.filter(
-              (ow) => ow.type === "member"
-            );
+          const memberOverrides = freshChannel.permissionOverwrites.cache.filter(
+            (ow) => ow.type === "member"
+          );
 
-          // Iterate over each member override
           for (const overwrite of memberOverrides.values()) {
-            if (overwrite.id !== ticketCreatorId) {
+            if (overwrite.id !== ticketCreatorId && overwrite.id !== interaction.client.user.id) {
               try {
                 const member = await guild.members.fetch(overwrite.id);
                 if (member) {
                   await member.send({
                     content: `Here is the transcript for ticket channel ${ticketChannel.name}:`,
-                    files: [
-                      { attachment: transcriptBuffer, name: "transcript.txt" },
-                    ],
+                    files: [{ attachment: transcriptBuffer, name: "transcript.txt" }],
                   });
+                  recipients.push(`${member.user.tag} (${member.id})`);
                 }
               } catch (error) {
-                console.error(
-                  `Error sending transcript to user with ID ${overwrite.id}:`,
-                  error
-                );
+                console.error(`Error sending to user ID ${overwrite.id}:`, error);
               }
             }
           }
 
-          // Mark the channel as closed so that further commands are blocked.
-          global.closedChannels.add(ticketChannel.id);
-
-          await interaction.editReply({
-            content: "Ticket closed and transcript saved.",
+          await transcriptChannel.send({
+            content: recipients.length > 0
+              ? "Transcript was successfully sent to:\n" + recipients.map(r => `• ${r}`).join("\n")
+              : "No users could be DM'd the transcript.",
           });
 
-          // Delete the channel after a short delay.
+          global.closedChannels.add(ticketChannel.id);
+          await interaction.editReply({ content: "Ticket closed and transcript saved." });
+
           setTimeout(() => {
             ticketChannel.delete().catch(console.error);
           }, 5000);
         } catch (error) {
           global.closingTickets.delete(ticketChannel.id);
           console.error("Error closing ticket and saving transcript:", error);
-          await interaction.editReply({
-            content: "There was an error closing the ticket.",
-          });
+          await interaction.editReply({ content: "There was an error closing the ticket." });
         }
       }
     }
