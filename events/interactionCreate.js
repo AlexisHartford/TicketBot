@@ -1,6 +1,7 @@
 const { PermissionsBitField, ChannelType } = require("discord.js");
 const mysql = require("mysql2/promise");
 const config = require("../config.json");
+
 // At the top of the file, you can also initialize the sets if desired.
 if (!global.closingTickets) global.closingTickets = new Set();
 if (!global.closedChannels) global.closedChannels = new Set();
@@ -35,13 +36,13 @@ async function fetchAllMessages(channel) {
 module.exports = {
   name: "interactionCreate",
   async execute(interaction) {
-    // Handle slash commands.
     if (!interaction.guild) {
       return interaction.reply({
         content: "This command can only be used in a server.",
         ephemeral: true,
       });
     }
+
     if (interaction.isChatInputCommand()) {
       const command = interaction.client.commands.get(interaction.commandName);
       if (!command) return;
@@ -101,7 +102,20 @@ module.exports = {
               },
               {
                 id: interaction.client.user.id,
-                allow: PermissionsBitField.Flags.All, // Grant all permissions to the bot
+                allow: [
+                  PermissionsBitField.Flags.ViewChannel,
+                  PermissionsBitField.Flags.SendMessages,
+                  PermissionsBitField.Flags.ReadMessageHistory,
+                  PermissionsBitField.Flags.ManageChannels,
+                  PermissionsBitField.Flags.ManageMessages,
+                  PermissionsBitField.Flags.EmbedLinks,
+                  PermissionsBitField.Flags.AttachFiles,
+                  PermissionsBitField.Flags.ReadMessageHistory,
+                  PermissionsBitField.Flags.MentionEveryone,
+                  PermissionsBitField.Flags.UseExternalEmojis,
+                  PermissionsBitField.Flags.UseExternalStickers,
+                  PermissionsBitField.Flags.AddReactions,
+                ],
               },
               ...(staffRoleID
                 ? [
@@ -118,9 +132,6 @@ module.exports = {
             ],
           });
 
-          // Sync permissions to make sure the bot's permissions are correctly applied.
-          await ticketChannel.permissionOverwrites.sync();
-
           // Build the ping content based on whether ping_staff is true.
           const pingContent =
             pingStaff && staffRoleID
@@ -131,13 +142,13 @@ module.exports = {
           await ticketChannel.send({ content: pingContent });
           await interaction.reply({
             content: `Your ticket has been created: ${ticketChannel}`,
-            ephemeral: true,
+            flags: 64, // Use flags for ephemeral messages
           });
         } catch (error) {
           console.error("Error creating ticket channel:", error);
           await interaction.reply({
             content: "There was an error creating your ticket channel.",
-            ephemeral: true,
+            flags: 64, // Use flags for ephemeral messages
           });
         }
       } else if (interaction.customId === "confirmClose") {
@@ -230,58 +241,29 @@ module.exports = {
             }
           }
 
-          // Send the transcript to all members except the bot and the ticket creator.
-          for (const overwrite of memberOverrides.values()) {
-            if (
-              overwrite.id !== ticketCreatorId &&
-              overwrite.id !== interaction.client.user.id
-            ) {
-              try {
-                const member = await guild.members.fetch(overwrite.id);
-                if (member) {
-                  console.log(
-                    `Attempting to send transcript to user ${member.user.tag} (${overwrite.id})`
-                  );
-                  await member.send({
-                    content: `Here is the transcript for ticket channel ${ticketChannel.name}:`,
-                    files: [
-                      { attachment: transcriptBuffer, name: "transcript.txt" },
-                    ],
-                  });
-                  console.log(
-                    `Transcript sent successfully to ${member.user.tag} (${overwrite.id})`
-                  );
-                } else {
-                  console.log(
-                    `Member not found for override with ID ${overwrite.id}`
-                  );
-                }
-              } catch (error) {
-                console.error(
-                  `Error sending transcript to user with ID ${overwrite.id}:`,
-                  error
-                );
+          // Send the transcript to all members of the ticket
+          if (ticketCreatorId) {
+            try {
+              const ticketCreator = await guild.members.fetch(ticketCreatorId);
+              if (ticketCreator) {
+                await ticketCreator.send({
+                  content: `Here is the transcript for your ticket channel ${ticketChannel.name}:`,
+                  files: [
+                    { attachment: transcriptBuffer, name: "transcript.txt" },
+                  ],
+                });
               }
-            } else {
-              console.log(
-                `Skipping bot or ticket creator override with ID ${overwrite.id}`
-              );
+            } catch (error) {
+              console.error("Error sending DM transcript to ticket creator:", error);
             }
           }
-
-          // Log ticket creator ID for reference
-          console.log(`Ticket Creator ID: ${ticketCreatorId}`);
 
           // Re-fetch the channel to get updated permission overwrites
           const freshChannel = await guild.channels.fetch(ticketChannel.id);
           const memberOverrides =
             freshChannel.permissionOverwrites.cache.filter(
-              (ow) => ow.type === 1
+              (ow) => ow.type === "member"
             );
-          console.log(
-            "Member Overrides found:",
-            memberOverrides.map((ow) => ow.id).join(", ")
-          );
 
           // Iterate over each member override
           for (const overwrite of memberOverrides.values()) {
@@ -289,22 +271,12 @@ module.exports = {
               try {
                 const member = await guild.members.fetch(overwrite.id);
                 if (member) {
-                  console.log(
-                    `Attempting to send transcript to user ${member.user.tag} (${overwrite.id})`
-                  );
                   await member.send({
                     content: `Here is the transcript for ticket channel ${ticketChannel.name}:`,
                     files: [
                       { attachment: transcriptBuffer, name: "transcript.txt" },
                     ],
                   });
-                  console.log(
-                    `Transcript sent successfully to ${member.user.tag} (${overwrite.id})`
-                  );
-                } else {
-                  console.log(
-                    `Member not found for override with ID ${overwrite.id}`
-                  );
                 }
               } catch (error) {
                 console.error(
@@ -312,10 +284,6 @@ module.exports = {
                   error
                 );
               }
-            } else {
-              console.log(
-                `Skipping ticket creator override with ID ${overwrite.id}`
-              );
             }
           }
 
