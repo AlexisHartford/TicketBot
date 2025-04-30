@@ -1,4 +1,3 @@
-// Define Required Packages
 const { Client, Collection, GatewayIntentBits, Partials } = require("discord.js");
 const express = require("express");
 const fs = require("fs");
@@ -8,11 +7,13 @@ const mysql = require("mysql2/promise");
 const { exec } = require("child_process");
 
 const app = express();
-
-// Load Configuration
 const config = require("./config.json");
 
-// MySQL Database Connection
+// GitHub settings (for public repo)
+const REPO_OWNER = "AlexisHartford";
+const REPO_NAME = "TicketBot";
+
+// Database pool
 const db = mysql.createPool({
   host: config.mysql.host,
   user: config.mysql.user,
@@ -23,8 +24,11 @@ const db = mysql.createPool({
   queueLimit: 0,
 });
 
+let discordClient = null;
+let botActive = false;
 let lastHeartbeatTimestamp = 0;
 
+// Heartbeat
 async function updateHeartbeat() {
   const timestamp = Math.floor(Date.now() / 1000);
   lastHeartbeatTimestamp = timestamp;
@@ -34,35 +38,40 @@ async function updateHeartbeat() {
       [config.server_id, timestamp]
     );
   } catch (error) {
-    console.error("MySQL Heartbeat Error:", error);
+    console.error("Heartbeat error:", error);
   }
 }
 
-let discordClient = null;
-let botActive = false;
+// Require cache clearing
+function clearRequireCache(filePath) {
+  delete require.cache[require.resolve(filePath)];
+}
 
+// Command and event loader
 function registerCommandsAndEvents(client) {
   client.commands = new Collection();
-  const eventsPath = path.join(__dirname, "events");
-  const eventFiles = fs.readdirSync(eventsPath).filter((file) => file.endsWith(".js"));
+
   const foldersPath = path.join(__dirname, "commands");
   const commandFolders = fs.readdirSync(foldersPath);
-
   for (const folder of commandFolders) {
     const commandsPath = path.join(foldersPath, folder);
-    const commandFiles = fs.readdirSync(commandsPath).filter((file) => file.endsWith(".js"));
+    const commandFiles = fs.readdirSync(commandsPath).filter((f) => f.endsWith(".js"));
     for (const file of commandFiles) {
       const filePath = path.join(commandsPath, file);
+      clearRequireCache(filePath);
       const command = require(filePath);
       if ("data" in command && "execute" in command) {
         client.commands.set(command.data.name, command);
-        console.log(`The command was added to Server! ${command.data.name}`);
+        console.log(`Loaded command: ${command.data.name}`);
       }
     }
   }
 
+  const eventsPath = path.join(__dirname, "events");
+  const eventFiles = fs.readdirSync(eventsPath).filter((file) => file.endsWith(".js"));
   for (const file of eventFiles) {
     const filePath = path.join(eventsPath, file);
+    clearRequireCache(filePath);
     const event = require(filePath);
     if (event.once) {
       client.once(event.name, (...args) => event.execute(...args));
@@ -72,9 +81,10 @@ function registerCommandsAndEvents(client) {
   }
 }
 
+// Bot start/stop
 async function activateBot() {
   if (botActive) return;
-  console.log("Activating bot for server_id", config.server_id);
+  console.log("Activating bot...");
   discordClient = new Client({
     intents: [
       GatewayIntentBits.Guilds,
@@ -92,173 +102,159 @@ async function activateBot() {
   try {
     await discordClient.login(config.discord.token);
     botActive = true;
-    console.log("Bot activated and logged in.");
+    console.log("Bot logged in.");
   } catch (error) {
-    console.error("Error activating bot:", error);
+    console.error("Login error:", error);
   }
 }
 
 async function deactivateBot() {
   if (!botActive || !discordClient) return;
-  console.log("Deactivating bot for server_id", config.server_id);
+  console.log("Deactivating bot...");
   try {
     await discordClient.destroy();
-    discordClient = null;
     botActive = false;
+    discordClient = null;
     console.log("Bot deactivated.");
   } catch (error) {
-    console.error("Error deactivating bot:", error);
+    console.error("Deactivation error:", error);
   }
 }
 
+// Failover logic
 async function checkFailoverStatus() {
   try {
     const currentTime = Math.floor(Date.now() / 1000);
-    const threshold = 5;
     const [rows] = await db.query(
       "SELECT server_id, last_heartbeat FROM server_status WHERE server_id < ?",
       [config.server_id]
     );
-
-    return rows.some(row => currentTime - row.last_heartbeat <= threshold);
+    return rows.some((row) => currentTime - row.last_heartbeat <= 5);
   } catch (error) {
-    console.error("Failover Check Error:", error);
+    console.error("Failover check failed:", error);
     return false;
   }
 }
 
 async function checkAndToggleBot() {
-  const higherPriorityActive = await checkFailoverStatus();
-  if (higherPriorityActive) {
-    if (botActive) {
-      console.log("Higher priority server detected. Deactivating this bot instance.");
-      await deactivateBot();
-    }
-  } else {
-    if (!botActive) {
-      console.log("No higher priority server detected. Activating this bot instance.");
-      await activateBot();
-    }
+  const otherActive = await checkFailoverStatus();
+  if (otherActive && botActive) {
+    await deactivateBot();
+  } else if (!otherActive && !botActive) {
+    await activateBot();
   }
 }
 
-// Auto-update checker
+// Auto-updater (for public repo)
 async function checkForUpdate() {
   try {
     const current = require("./version.json").commit;
-    const { data } = await axios.get("https://api.github.com/repos/YOUR_USERNAME/YOUR_REPO/commits/main");
+    const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/commits/main`;
+
+    const { data } = await axios.get(url, {
+      headers: { "User-Agent": "GalaxyBot-Updater" }
+    });
+
     const latest = data.sha;
 
-    if (current !== latest) {
-      console.log("New version detected. Updating...");
-      exec("git pull && npm install", (err, stdout, stderr) => {
-        if (err) return console.error("Update failed:", stderr);
-        fs.writeFileSync("./version.json", JSON.stringify({ commit: latest }, null, 2));
-        console.log("Update applied. Restarting...");
-        exec("pm2 restart bot", (err) => {
-          if (err) console.error("Restart failed:", err);
-        });
-      });
+    if (current === latest) {
+      console.log("✅ Bot is already up-to-date.");
+      return;  // Early exit if the bot is already up-to-date.
     }
+
+    console.log("New update detected. Pulling...");
+
+    exec("git pull && npm install", (err, stdout, stderr) => {
+      if (err) {
+        // Check for tracking error
+        if (stderr.includes("no tracking information")) {
+          console.error("❌ Git pull failed: No upstream tracking branch is set.");
+          console.error("👉 Fix it by running this command in your repo:");
+          console.error("   git branch --set-upstream-to=origin/main main");
+        } else {
+          console.error("Update failed:", stderr || err.message);
+        }
+        return;
+      }
+
+      // Write new commit hash to version.json
+      fs.writeFileSync("./version.json", JSON.stringify({ commit: latest }, null, 2));
+      console.log("✅ Update successful. Restarting bot...");
+
+      // Restart the bot by exiting the process
+      process.exit(0);  // This will exit the process, causing the environment to restart the bot.
+    });
   } catch (err) {
-    console.error("Update check failed:", err);
+    console.error("Update check failed:", err.message || err);
   }
 }
 
-// Serve auth
-app.get("/auth", (req, res) => {
-  const discordAuthUrl = "https://discord.com/api/oauth2/authorize?client_id=1348418225880301622&redirect_uri=https://ticket.galaxyvr.net/dashboard.html&response_type=token&scope=identify%20guilds";
-  res.redirect(discordAuthUrl);
-});
 
-// Bot invite
-const BOT_CLIENT_ID = process.env.BOT_CLIENT_ID || config.discord.client.id; 
-const BOT_PERMISSIONS = 1118839105616;
+
+// Express routes
+app.get("/auth", (req, res) => {
+  res.redirect("https://discord.com/api/oauth2/authorize?client_id=1348418225880301622&redirect_uri=https://ticket.galaxyvr.net/dashboard.html&response_type=token&scope=identify%20guilds");
+});
 
 app.get("/api/invite-url", (req, res) => {
   const guildId = req.query.guild_id;
-  if (!guildId) return res.status(400).json({ error: "guild_id query parameter is required" });
+  const BOT_CLIENT_ID = config.discord.client.id;
+  const BOT_PERMISSIONS = 1118839105616;
+  if (!guildId) return res.status(400).json({ error: "guild_id is required" });
   const inviteUrl = `https://discord.com/api/oauth2/authorize?client_id=${BOT_CLIENT_ID}&scope=bot+applications.commands&permissions=${BOT_PERMISSIONS}&guild_id=${guildId}`;
   res.json({ inviteUrl });
 });
 
-// Guilds
 app.get("/api/ticket_settings", async (req, res) => {
   try {
     const [rows] = await db.query("SELECT guild_id FROM ticket_settings");
-    const guildIds = rows.map(row => String(row.guild_id));
-    res.json(guildIds);
-  } catch (error) {
-    console.error("Error fetching ticket settings:", error);
-    res.status(500).json({ error: "Error fetching ticket settings" });
+    res.json(rows.map(r => String(r.guild_id)));
+  } catch (err) {
+    console.error("Ticket settings error:", err);
+    res.status(500).json({ error: "DB error" });
   }
 });
 
-// Serve public dashboard
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, "public")));
 
-// Error logging
+// Graceful shutdown
 let appStatus = 1;
-const logErrorToFile = (error) => {
-  const timestamp = new Date().toISOString();
-  const logMessage = `${timestamp}: ${error.stack}\n`;
-  fs.appendFile("error.log", logMessage, (err) => {
-    if (err) console.error("Error writing to error.log:", err);
-  });
-};
+const heartbeatInterval = setInterval(updateHeartbeat, 1000);
+const failoverInterval = setInterval(checkAndToggleBot, 5000);
+const updateCheckInterval = setInterval(checkForUpdate, 60000); // 1 min
 
 app.use((req, res, next) => {
   if (appStatus) return next();
-  throw new Error("App is closing");
-});
-
-process.on("uncaughtException", (error) => {
-  console.error("Uncaught Exception:", error);
-  logErrorToFile(error);
-  process.exit(1);
-});
-
-process.on("unhandledRejection", (reason, promise) => {
-  console.error("Unhandled Rejection at:", promise, "reason:", reason);
-});
-
-// Tasks
-const heartbeatInterval = setInterval(updateHeartbeat, 1000);
-const failoverInterval = setInterval(checkAndToggleBot, 5000);
-const updateCheckInterval = setInterval(checkForUpdate, 60000); // every 60s
-
-(async () => {
-  await updateHeartbeat();
-  const higherPriorityActive = await checkFailoverStatus();
-  if (!higherPriorityActive) {
-    await activateBot();
-  } else {
-    console.log("Higher priority server active on initial check. Bot remains inactive.");
-  }
-})();
-
-// Express
-const PORT = process.env.PORT || 8000;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`Dashboard available at http://localhost:${PORT}/`);
+  throw new Error("App closing");
 });
 
 process.on("SIGINT", () => {
-  console.log("*** SIGINT received. Shutting down gracefully. ***");
+  console.log("SIGINT received. Shutting down.");
   appStatus = 0;
   clearInterval(heartbeatInterval);
   clearInterval(failoverInterval);
   clearInterval(updateCheckInterval);
   if (discordClient) {
-    discordClient.destroy().then(() => {
-      console.log("Discord client destroyed.");
-      process.exit(0);
-    }).catch((error) => {
-      console.error("Error destroying Discord client:", error);
-      process.exit(1);
-    });
+    discordClient.destroy().then(() => process.exit(0));
   } else {
     process.exit(0);
   }
 });
+
+process.on("unhandledRejection", (r) => console.error("Unhandled Rejection:", r));
+
+const PORT = process.env.PORT || 8000;
+app.listen(PORT, () => {
+  console.log(`Server running at http://localhost:${PORT}`);
+});
+
+// Initial start
+(async () => {
+  await updateHeartbeat();
+  const active = await checkFailoverStatus();
+  if (!active) {
+    await activateBot();
+  } else {
+    console.log("Higher priority bot active. Staying idle.");
+  }
+})();
