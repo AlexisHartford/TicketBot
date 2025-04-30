@@ -10,7 +10,7 @@
   "mysql": {
     "host": "",
     "user": "",
-    "password": "",
+    "password": "Test",
     "database": "Test"
   }
 }
