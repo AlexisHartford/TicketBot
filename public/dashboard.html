@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Dashboard - Admin Servers</title>
+  <style>
+    /* Reset defaults */
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; font-family: Arial, sans-serif; color: #fff; }
+    body {
+        background: url('https://media.istockphoto.com/id/1198684732/photo/stars-and-galaxy-space-sky-night-background.jpg?s=612x612&w=0&k=20&c=U6AnXKYJpi9H2tCeGGXSAS_ctR4pgsC-yC07J5ECH5M=') no-repeat center center fixed;
+        background-size: cover;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding-top: 50px;
+    }
+    .container {
+      background: rgba(0, 0, 0, 0.7);
+      padding: 20px;
+      border-radius: 10px;
+      width: 80%;
+      max-width: 800px;
+      text-align: center;
+    }
+    h1 {
+      margin-bottom: 20px;
+      font-size: 2.5em;
+      text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.6);
+    }
+    .server-button {
+      display: block;
+      width: 100%;
+      margin: 10px 0;
+      padding: 15px;
+      background: linear-gradient(45deg, #7289da, #99aab5);
+      border: none;
+      border-radius: 5px;
+      font-size: 1.2em;
+      color: #fff;
+      cursor: pointer;
+      transition: background 0.3s ease, transform 0.3s ease;
+    }
+    .server-button:hover {
+      background: linear-gradient(45deg, #99aab5, #7289da);
+      transform: scale(1.02);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Your Admin Servers</h1>
+    <div id="servers"></div>
+  </div>
+
+  <script>
+    // --- Helper Functions ---
+    // Parse the access token from URL hash
+    function getAccessToken() {
+      const hash = window.location.hash;
+      if (hash) {
+        const params = new URLSearchParams(hash.substring(1));
+        return params.get('access_token');
+      }
+      return null;
+    }
+
+    // Fetch user's guilds from Discord API
+    async function fetchGuilds(token) {
+      const response = await fetch("https://discord.com/api/users/@me/guilds", {
+        headers: { "Authorization": "Bearer " + token }
+      });
+      return await response.json();
+    }
+
+    // Check if the user is admin (owner or has admin permission bit 0x8)
+    function isAdmin(guild) {
+      if (guild.owner) return true;
+      const perms = BigInt(guild.permissions);
+      return (perms & BigInt(0x8)) === BigInt(0x8);
+    }
+
+    // Fetch the list of guild IDs from your database via your API endpoint
+    async function fetchTicketSettingsGuilds() {
+      try {
+        const response = await fetch("/api/ticket_settings");
+        return await response.json();
+      } catch (error) {
+        console.error("Error fetching ticket settings:", error);
+        return [];
+      }
+    }
+
+    // When a user clicks the button for a guild missing the bot, retrieve the invite URL from the server
+    async function handleAddBot(guildId) {
+      try {
+        const response = await fetch(`/api/invite-url?guild_id=${guildId}`);
+        const data = await response.json();
+        if (data.inviteUrl) {
+          window.location.href = data.inviteUrl;
+        } else {
+          alert("Failed to retrieve invite URL.");
+        }
+      } catch (error) {
+        console.error("Error fetching invite URL:", error);
+        alert("Error fetching invite URL.");
+      }
+    }
+
+    async function displayGuilds() {
+      const token = getAccessToken();
+      const serversDiv = document.getElementById("servers");
+
+      if (!token) {
+        serversDiv.innerHTML = "<p>Access token not found. Please log in again.</p>";
+        return;
+      }
+
+      try {
+        // Fetch both the user's guilds and the guild IDs from our database
+        const [guilds, ticketGuilds] = await Promise.all([
+          fetchGuilds(token),
+          fetchTicketSettingsGuilds()
+        ]);
+
+        // Ensure all IDs are strings for consistent comparison
+        const ticketGuildIds = ticketGuilds.map(g => String(g));
+
+        // Filter the user's guilds for admin privileges
+        const adminGuilds = guilds.filter(isAdmin);
+
+        if (adminGuilds.length === 0) {
+          serversDiv.innerHTML = "<p>No admin servers found.</p>";
+        } else {
+          adminGuilds.forEach(guild => {
+            const guildIdStr = String(guild.id);
+            const btn = document.createElement("button");
+            btn.classList.add("server-button");
+            btn.textContent = guild.name;
+            if (!ticketGuildIds.includes(guildIdStr)) {
+              btn.onclick = () => handleAddBot(guildIdStr);
+            } else {
+              btn.onclick = () => {
+                alert("Bot is already added to this server.");
+              };
+            }
+            serversDiv.appendChild(btn);
+          });
+        }
+      } catch (err) {
+        console.error("Error displaying guilds:", err);
+        serversDiv.innerHTML = "<p>Error fetching your guilds.</p>";
+      }
+    }
+
+    window.onload = displayGuilds;
+  </script>
+</body>
+</html>

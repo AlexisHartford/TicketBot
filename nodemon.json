@@ -1,0 +1,3 @@
+{
+  "ignore": ["threads.json", "commands/utility/leaderboardCache.json"]
+}

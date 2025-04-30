@@ -1,0 +1,29 @@
+{
+  "dependencies": {
+    "@keyv/mysql": "^1.7.5",
+    "@napi-rs/canvas": "^0.1.67",
+    "axios": "^1.7.9",
+    "canvas": "^2.11.2",
+    "cheerio": "^1.0.0-rc.12",
+    "discord.js": "^14.19.2",
+    "express": "^4.21.2",
+    "http": "^0.0.1-security",
+    "keyv": "^4.5.4",
+    "mysql": "^2.18.1",
+    "mysql2": "^3.14.1",
+    "node-php": "^0.0.1",
+    "php": "^1.1.0",
+    "php-express": "^0.0.3",
+    "php-server": "^1.0.0",
+    "playwright": "^1.42.0",
+    "puppeteer": "^24.2.1",
+    "string-similarity": "^4.0.0",
+    "ts-node": "^10.9.2"
+  },
+  "scripts": {
+    "start": "nodemon --inspect index.js --ignore threads.json --ignore leaderboardCache.json --ignore forums.json --ignore leaderboardCache.json --ignore token.txt --ignore status.json --ignore fleet_carriers.json"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9"
+  }
+}

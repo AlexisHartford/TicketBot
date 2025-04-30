@@ -1,0 +1,4 @@
+config.json
+.cache/puppeteer/
+.npm
+node_modules
