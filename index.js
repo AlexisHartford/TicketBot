@@ -164,26 +164,27 @@ async function checkForUpdate() {
 
     console.log("New update detected. Pulling...");
 
-    exec("git pull && npm install", (err, stdout, stderr) => {
-      if (err) {
-        // Check for tracking error
-        if (stderr.includes("no tracking information")) {
-          console.error("❌ Git pull failed: No upstream tracking branch is set.");
-          console.error("👉 Fix it by running this command in your repo:");
-          console.error("   git branch --set-upstream-to=origin/main main");
-        } else {
-          console.error("Update failed:", stderr || err.message);
-        }
-        return;
+    exec("git reset --hard && git pull && npm install", (err, stdout, stderr) => {
+    if (err) {
+      // Check for tracking error
+      if (stderr.includes("no tracking information")) {
+        console.error("❌ Git pull failed: No upstream tracking branch is set.");
+        console.error("👉 Fix it by running this command in your repo:");
+        console.error("   git branch --set-upstream-to=origin/main main");
+      } else {
+        console.error("Update failed:", stderr || err.message);
       }
+      return;
+    }
 
-      // Write new commit hash to version.json
-      fs.writeFileSync("./version.json", JSON.stringify({ commit: latest }, null, 2));
-      console.log("✅ Update successful. Restarting bot...");
+    // Write new commit hash to version.json
+    fs.writeFileSync("./version.json", JSON.stringify({ commit: latest }, null, 2));
+    console.log("✅ Update successful. Restarting bot...");
 
-      // Restart the bot by exiting the process
-      process.exit(0);  // This will exit the process, causing the environment to restart the bot.
-    });
+    // Restart the bot by exiting the process
+    process.exit(0);  // This will exit the process, causing the environment to restart the bot.
+  });
+
   } catch (err) {
     console.error("Update check failed:", err.message || err);
   }
