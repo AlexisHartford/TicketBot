@@ -36,7 +36,6 @@ module.exports = {
   name: "interactionCreate",
   async execute(interaction) {
     // Handle slash commands.
-    // At the top of the file, you can also initialize the sets if desired.
     if (!interaction.guild) {
       return interaction.reply({
         content: "This command can only be used in a server.",
@@ -102,7 +101,7 @@ module.exports = {
               },
               {
                 id: interaction.client.user.id,
-                allow: PermissionsBitField.Flags.All, // Give the bot all permissions
+                allow: PermissionsBitField.Flags.All, // Grant all permissions to the bot
               },
               ...(staffRoleID
                 ? [
@@ -118,6 +117,9 @@ module.exports = {
                 : []),
             ],
           });
+
+          // Sync permissions to make sure the bot's permissions are correctly applied.
+          await ticketChannel.permissionOverwrites.sync();
 
           // Build the ping content based on whether ping_staff is true.
           const pingContent =
@@ -228,28 +230,43 @@ module.exports = {
             }
           }
 
-          // Send the transcript to the ticket creator.
-          if (ticketCreatorId) {
-            try {
-              const ticketCreator = await guild.members.fetch(ticketCreatorId);
-              if (ticketCreator) {
-                await ticketCreator.send({
-                  content: `Here is the transcript for your ticket channel ${ticketChannel.name}:`,
-                  files: [
-                    { attachment: transcriptBuffer, name: "transcript.txt" },
-                  ],
-                });
+          // Send the transcript to all members except the bot and the ticket creator.
+          for (const overwrite of memberOverrides.values()) {
+            if (
+              overwrite.id !== ticketCreatorId &&
+              overwrite.id !== interaction.client.user.id
+            ) {
+              try {
+                const member = await guild.members.fetch(overwrite.id);
+                if (member) {
+                  console.log(
+                    `Attempting to send transcript to user ${member.user.tag} (${overwrite.id})`
+                  );
+                  await member.send({
+                    content: `Here is the transcript for ticket channel ${ticketChannel.name}:`,
+                    files: [
+                      { attachment: transcriptBuffer, name: "transcript.txt" },
+                    ],
+                  });
+                  console.log(
+                    `Transcript sent successfully to ${member.user.tag} (${overwrite.id})`
+                  );
+                } else {
+                  console.log(
+                    `Member not found for override with ID ${overwrite.id}`
+                  );
+                }
+              } catch (error) {
+                console.error(
+                  `Error sending transcript to user with ID ${overwrite.id}:`,
+                  error
+                );
               }
-            } catch (error) {
-              console.error(
-                "Error sending DM transcript to ticket creator:",
-                error
+            } else {
+              console.log(
+                `Skipping bot or ticket creator override with ID ${overwrite.id}`
               );
             }
-          } else {
-            console.warn(
-              "Ticket creator not found in the first message's mentions; skipping DM."
-            );
           }
 
           // Log ticket creator ID for reference
@@ -322,6 +339,5 @@ module.exports = {
         }
       }
     }
-    // Handle other interaction types (autocomplete, select menus, modals, etc.)
   },
 };
