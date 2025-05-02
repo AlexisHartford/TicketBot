@@ -60,6 +60,7 @@ module.exports = {
         name: channelName,
         type: ChannelType.GuildText,
         parent: categoryID || undefined,
+        lockPermissions: false,
         permissionOverwrites: [
           {
             id: guild.roles.everyone.id,
@@ -85,6 +86,14 @@ module.exports = {
                 },
               ]
             : []),
+          {
+            id: interaction.client.user.id, // ensure bot has explicit access
+            allow: [
+              PermissionsBitField.Flags.ViewChannel,
+              PermissionsBitField.Flags.SendMessages,
+              PermissionsBitField.Flags.ReadMessageHistory,
+            ],
+          },
         ],
       });
 
