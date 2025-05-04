@@ -80,77 +80,41 @@ module.exports = {
         }
 
         try {
-          // Create the ticket channel.
+          // Step 1: Create the channel with category only — this syncs permissions
           const ticketChannel = await guild.channels.create({
-            name: `ticket-${user.username}`
-              .toLowerCase()
-              .replace(/[^a-z0-9-]/g, ""),
+            name: `ticket-${user.username}`.toLowerCase().replace(/[^a-z0-9-]/g, ""),
             type: ChannelType.GuildText,
-            parent: categoryID || undefined,
-            permissionOverwrites: [
-              {
-                id: guild.roles.everyone.id,
-                deny: [PermissionsBitField.Flags.ViewChannel],
-              },
-              {
-                id: user.id,
-                allow: [
-                  PermissionsBitField.Flags.ViewChannel,
-                  PermissionsBitField.Flags.SendMessages,
-                  PermissionsBitField.Flags.ReadMessageHistory,
-                ],
-              },
-              {
-                id: interaction.client.user.id,
-                allow: [
-                  PermissionsBitField.Flags.ViewChannel,
-                  PermissionsBitField.Flags.SendMessages,
-                  PermissionsBitField.Flags.ReadMessageHistory,
-                  PermissionsBitField.Flags.ManageChannels,
-                  PermissionsBitField.Flags.ManageMessages,
-                  PermissionsBitField.Flags.EmbedLinks,
-                  PermissionsBitField.Flags.AttachFiles,
-                  PermissionsBitField.Flags.ReadMessageHistory,
-                  PermissionsBitField.Flags.MentionEveryone,
-                  PermissionsBitField.Flags.UseExternalEmojis,
-                  PermissionsBitField.Flags.UseExternalStickers,
-                  PermissionsBitField.Flags.AddReactions,
-                ],
-              },
-              ...(staffRoleID
-                ? [
-                    {
-                      id: staffRoleID,
-                      allow: [
-                        PermissionsBitField.Flags.ViewChannel,
-                        PermissionsBitField.Flags.SendMessages,
-                        PermissionsBitField.Flags.ReadMessageHistory,
-                      ],
-                    },
-                  ]
-                : []),
-            ],
+            parent: categoryID || undefined, // Syncs perms if no permissionOverwrites are set
           });
-
-          // Build the ping content based on whether ping_staff is true.
+        
+          // Step 2: Manually add the user after creation
+          await ticketChannel.permissionOverwrites.edit(user.id, {
+            ViewChannel: true,
+            SendMessages: true,
+            ReadMessageHistory: true,
+          });
+        
+          // Step 3: Send the message
           const pingContent =
             pingStaff && staffRoleID
               ? `<@&${staffRoleID}> <@${user.id}>, your ticket has been created.`
               : `<@${user.id}>, your ticket has been created.`;
-
-          // Send the initial ticket message.
+        
           await ticketChannel.send({ content: pingContent });
+        
           await interaction.reply({
             content: `Your ticket has been created: ${ticketChannel}`,
-            flags: 64, // Use flags for ephemeral messages
+            flags: 64,
           });
         } catch (error) {
           console.error("Error creating ticket channel:", error);
           await interaction.reply({
             content: "There was an error creating your ticket channel.",
-            flags: 64, // Use flags for ephemeral messages
+            flags: 64,
           });
         }
+        
+        
       } else if (interaction.customId === "confirmClose") {
         await interaction.deferReply({ ephemeral: true });
         const guild = interaction.guild;
