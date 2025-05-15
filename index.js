@@ -159,21 +159,14 @@ async function checkAndToggleBot() {
 
 async function checkForUpdate() {
   try {
-    const fs = require("fs");
-    const axios = require("axios");
-    const { exec } = require("child_process");
-
-    const config = require("./config.json");
     const current = require("./version.json").commit;
-
-    const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/commits/heads/${config.branch}`;
-    console.log(url)
+    const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/commits?sha=${config.branch}`;
 
     const { data } = await axios.get(url, {
-      headers: { "User-Agent": "GalaxyBot-Updater" }
+      headers: { "User-Agent": "GalaxyBot-Updater" },
     });
 
-    const latest = data.sha;
+    const latest = data[0].sha;
 
     if (current === latest) {
       console.log("✅ Bot is already up-to-date.");
@@ -181,43 +174,25 @@ async function checkForUpdate() {
     }
 
     console.log("🚀 New update detected on branch:", config.branch);
-    console.log("🔄 Cleaning old files...");
+    console.log("📥 Pulling latest version from GitHub...");
 
-    // Clean all files and folders except .git, version.json, and config.json
-    exec('find . -maxdepth 1 ! -name ".git" ! -name "version.json" ! -name "config.json" ! -name "." -exec rm -rf {} +', (cleanupErr) => {
-      if (cleanupErr) {
-        console.error("❌ Failed to clean files:", cleanupErr.message);
+    exec(`git fetch origin ${config.branch} && git reset --hard origin/${config.branch} && npm install`, (err, stdout, stderr) => {
+      if (err) {
+        console.error("❌ Update failed:", stderr || err.message);
         return;
       }
 
-      console.log("📥 Pulling latest version from GitHub...");
-
-      // Ensure we're using the correct branch
-      exec(`git fetch origin ${config.branch} && git reset --hard origin/${config.branch} && npm install`, (err, stdout, stderr) => {
-        if (err) {
-          if (stderr.includes("no tracking information")) {
-            console.error("❌ Git pull failed: No upstream tracking branch is set.");
-            console.error("👉 Fix it by running this command in your repo:");
-            console.error(`   git branch --set-upstream-to=origin/${config.branch} ${config.branch}`);
-          } else {
-            console.error("❌ Update failed:", stderr || err.message);
-          }
-          return;
-        }
-
-        // Save new commit hash
-        fs.writeFileSync("./version.json", JSON.stringify({ commit: latest }, null, 2));
-        console.log("✅ Update successful. Restarting bot...");
-
-        // Restart the bot
-        process.exit(0);
-      });
+      // Save new commit hash
+      fs.writeFileSync("./version.json", JSON.stringify({ commit: latest }, null, 2));
+      console.log("✅ Update successful. Restarting bot...");
+      process.exit(0); // Optional: let host auto-restart
     });
 
-  } catch (err) {
-    console.error("Update check failed:", err.message || err);
+  } catch (error) {
+    console.error("❌ Update check failed:", error.message);
   }
 }
+
 
 
 // Express routes
