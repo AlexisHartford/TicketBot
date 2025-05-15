@@ -83,7 +83,7 @@
     // Fetch the list of guild IDs from your database via your API endpoint
     async function fetchTicketSettingsGuilds() {
       try {
-        const response = await fetch("/api/ticket_settings");
+        const response = await fetch("/api/ticket_types");
         return await response.json();
       } catch (error) {
         console.error("Error fetching ticket settings:", error);
