@@ -160,9 +160,18 @@ async function checkAndToggleBot() {
 // Auto-updater (for public repo)
 async function checkForUpdate() {
   try {
-    const current = require("./version.json").commit;
-    const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/commits/${config.branch}`;
+    const fs = require("fs");
+const axios = require("axios");
+const { exec } = require("child_process");
 
+const config = require("./config.json");
+const current = require("./version.json").commit;
+
+
+const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/commits/${config.branch}`;
+
+(async () => {
+  try {
     const { data } = await axios.get(url, {
       headers: { "User-Agent": "GalaxyBot-Updater" }
     });
@@ -171,27 +180,46 @@ async function checkForUpdate() {
 
     if (current === latest) {
       console.log("✅ Bot is already up-to-date.");
-      return;  // Early exit if the bot is already up-to-date.
-    }
-
-    console.log("New update detected. Pulling...");
-
-    exec("git reset --hard && git pull && npm install", (err, stdout, stderr) => {
-    if (err) {
-      // Check for tracking error
-      if (stderr.includes("no tracking information")) {
-        console.error("❌ Git pull failed: No upstream tracking branch is set.");
-        console.error("👉 Fix it by running this command in your repo:");
-        console.error("   git branch --set-upstream-to=origin/main main");
-      } else {
-        console.error("Update failed:", stderr || err.message);
-      }
       return;
     }
 
-    // Write new commit hash to version.json
-    fs.writeFileSync("./version.json", JSON.stringify({ commit: latest }, null, 2));
-    console.log("✅ Update successful. Restarting bot...");
+    console.log("🚀 New update detected on branch:", config.branch);
+    console.log("🔄 Cleaning old files...");
+
+    // Clean all files and folders except .git, version.json, and config.json
+    exec('find . -maxdepth 1 ! -name ".git" ! -name "version.json" ! -name "config.json" ! -name "." -exec rm -rf {} +', (cleanupErr) => {
+      if (cleanupErr) {
+        console.error("❌ Failed to clean files:", cleanupErr.message);
+        return;
+      }
+
+      console.log("📥 Pulling latest version from GitHub...");
+
+      // Ensure we're using the correct branch
+      exec(`git fetch origin ${config.branch} && git reset --hard origin/${config.branch} && npm install`, (err, stdout, stderr) => {
+        if (err) {
+          if (stderr.includes("no tracking information")) {
+            console.error("❌ Git pull failed: No upstream tracking branch is set.");
+            console.error("👉 Fix it by running this command in your repo:");
+            console.error(`   git branch --set-upstream-to=origin/${config.branch} ${config.branch}`);
+          } else {
+            console.error("❌ Update failed:", stderr || err.message);
+          }
+          return;
+        }
+
+        // Save new commit hash
+        fs.writeFileSync("./version.json", JSON.stringify({ commit: latest }, null, 2));
+        console.log("✅ Update successful. Restarting bot...");
+        // Optional: Add restart logic here (e.g. process.exit(), pm2 restart, etc.)
+      });
+    });
+
+  } catch (error) {
+    console.error("❌ Failed to check for updates:", error.message);
+  }
+})();
+
 
     // Restart the bot by exiting the process
     process.exit(0);  // This will exit the process, causing the environment to restart the bot.
