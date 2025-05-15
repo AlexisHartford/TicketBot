@@ -10,8 +10,8 @@ const app = express();
 const config = require("./config.json");
 
 // GitHub settings (for public repo)
- const REPO_OWNER = "AlexisHartford";
- const REPO_NAME = "TicketBot";
+const REPO_OWNER = "AlexisHartford";
+const REPO_NAME = "TicketBot";
 
 // Database pool
 const db = mysql.createPool({
@@ -161,7 +161,7 @@ async function checkAndToggleBot() {
 async function checkForUpdate() {
   try {
     const current = require("./version.json").commit;
-    const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/commits/main`;
+    const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/commits/${config.branch}`;
 
     const { data } = await axios.get(url, {
       headers: { "User-Agent": "GalaxyBot-Updater" }
@@ -244,7 +244,7 @@ process.on("SIGINT", () => {
   appStatus = 0;
   clearInterval(heartbeatInterval);
   clearInterval(failoverInterval);
-  clearInterval(updateCheckInterval);
+  // clearInterval(updateCheckInterval);
   if (discordClient) {
     discordClient.destroy().then(() => process.exit(0));
   } else {
