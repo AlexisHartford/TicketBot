@@ -167,7 +167,7 @@ async function checkForUpdate() {
     const current = require("./version.json").commit;
 
     const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/commits/heads/${config.branch}`;
-
+    console.log(url)
 
     const { data } = await axios.get(url, {
       headers: { "User-Agent": "GalaxyBot-Updater" }
