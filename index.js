@@ -216,9 +216,9 @@ app.get("/api/invite-url", (req, res) => {
   res.json({ inviteUrl });
 });
 
-app.get("/api/ticket_settings", async (req, res) => {
+app.get("/api/ticket_types", async (req, res) => {
   try {
-    const [rows] = await db.query("SELECT guild_id FROM ticket_settings");
+    const [rows] = await db.query("SELECT guild_id FROM ticket_types");
     res.json(rows.map(r => String(r.guild_id)));
   } catch (err) {
     console.error("Ticket settings error:", err);
