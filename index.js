@@ -157,21 +157,17 @@ async function checkAndToggleBot() {
   }
 }
 
-// Auto-updater (for public repo)
 async function checkForUpdate() {
   try {
     const fs = require("fs");
-const axios = require("axios");
-const { exec } = require("child_process");
+    const axios = require("axios");
+    const { exec } = require("child_process");
 
-const config = require("./config.json");
-const current = require("./version.json").commit;
+    const config = require("./config.json");
+    const current = require("./version.json").commit;
 
+    const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/commits/${config.branch}`;
 
-const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/commits/${config.branch}`;
-
-(async () => {
-  try {
     const { data } = await axios.get(url, {
       headers: { "User-Agent": "GalaxyBot-Updater" }
     });
@@ -211,24 +207,17 @@ const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/commits/${c
         // Save new commit hash
         fs.writeFileSync("./version.json", JSON.stringify({ commit: latest }, null, 2));
         console.log("✅ Update successful. Restarting bot...");
-        // Optional: Add restart logic here (e.g. process.exit(), pm2 restart, etc.)
+
+        // Restart the bot
+        process.exit(0);
       });
     });
-
-  } catch (error) {
-    console.error("❌ Failed to check for updates:", error.message);
-  }
-})();
-
-
-    // Restart the bot by exiting the process
-    process.exit(0);  // This will exit the process, causing the environment to restart the bot.
-  });
 
   } catch (err) {
     console.error("Update check failed:", err.message || err);
   }
 }
+
 
 // Express routes
 app.get("/auth", (req, res) => {
