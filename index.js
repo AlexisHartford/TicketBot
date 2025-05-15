@@ -167,8 +167,6 @@ const { exec } = require("child_process");
 const config = require("./config.json");
 const current = require("./version.json").commit;
 
-const REPO_OWNER = config.repo_owner;
-const REPO_NAME = config.repo_name;
 
 const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/commits/${config.branch}`;
 
