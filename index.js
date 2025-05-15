@@ -10,8 +10,8 @@ const app = express();
 const config = require("./config.json");
 
 // GitHub settings (for public repo)
-// const REPO_OWNER = "AlexisHartford";
-// const REPO_NAME = "TicketBot";
+ const REPO_OWNER = "AlexisHartford";
+ const REPO_NAME = "TicketBot";
 
 // Database pool
 const db = mysql.createPool({
@@ -244,7 +244,7 @@ process.on("SIGINT", () => {
   appStatus = 0;
   clearInterval(heartbeatInterval);
   clearInterval(failoverInterval);
-  // clearInterval(updateCheckInterval);
+  clearInterval(updateCheckInterval);
   if (discordClient) {
     discordClient.destroy().then(() => process.exit(0));
   } else {
