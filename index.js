@@ -10,8 +10,8 @@ const app = express();
 const config = require("./config.json");
 
 // GitHub settings (for public repo)
-const REPO_OWNER = "AlexisHartford";
-const REPO_NAME = "TicketBot";
+// const REPO_OWNER = "AlexisHartford";
+// const REPO_NAME = "TicketBot";
 
 // Database pool
 const db = mysql.createPool({
@@ -47,6 +47,9 @@ function clearRequireCache(filePath) {
   delete require.cache[require.resolve(filePath)];
 }
 
+// Create a set to track events that have been already registered
+const registeredEvents = new Set();
+
 // Command and event loader
 function registerCommandsAndEvents(client) {
   client.commands = new Collection();
@@ -73,11 +76,20 @@ function registerCommandsAndEvents(client) {
     const filePath = path.join(eventsPath, file);
     clearRequireCache(filePath);
     const event = require(filePath);
+
+    // Skip if the event is already registered
+    if (registeredEvents.has(event.name)) {
+      console.log(`Skipping duplicate event: ${event.name}`);
+      continue;
+    }
+
+    // Register the event
     if (event.once) {
       client.once(event.name, (...args) => event.execute(...args));
     } else {
       client.on(event.name, (...args) => event.execute(...args));
     }
+    registeredEvents.add(event.name);
   }
 }
 
@@ -190,8 +202,6 @@ async function checkForUpdate() {
   }
 }
 
-
-
 // Express routes
 app.get("/auth", (req, res) => {
   res.redirect("https://discord.com/api/oauth2/authorize?client_id=1348418225880301622&redirect_uri=https://ticket.galaxyvr.net/dashboard.html&response_type=token&scope=identify%20guilds");
@@ -234,7 +244,7 @@ process.on("SIGINT", () => {
   appStatus = 0;
   clearInterval(heartbeatInterval);
   clearInterval(failoverInterval);
-  clearInterval(updateCheckInterval);
+  // clearInterval(updateCheckInterval);
   if (discordClient) {
     discordClient.destroy().then(() => process.exit(0));
   } else {

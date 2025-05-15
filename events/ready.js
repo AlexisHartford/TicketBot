@@ -14,83 +14,89 @@ const db = mysql.createPool({
 
 async function initializeDatabase() {
   try {
-    // Existing table initializations...
+    // Ensure ticket_types table
     await db.query(`
-      CREATE TABLE IF NOT EXISTS ticket_settings (
-        guild_id VARCHAR(32) NOT NULL,
-        ticket_category VARCHAR(32) DEFAULT NULL,
-        transcript_channel VARCHAR(32) DEFAULT NULL,
-        staff_role VARCHAR(32) DEFAULT NULL,
-        ping_staff TINYINT(1) DEFAULT 0,
-        PRIMARY KEY (guild_id)
-      )
-    `);
+    CREATE TABLE IF NOT EXISTS ticket_types (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      guild_id VARCHAR(32) NOT NULL,
+      type_key VARCHAR(100) NOT NULL,
+      label VARCHAR(100) NOT NULL,
+      button_message TEXT NOT NULL,
+      ticket_category VARCHAR(32) NOT NULL,
+      transcript_channel VARCHAR(30) DEFAULT NULL,
+      button_channel VARCHAR(32) NOT NULL,
+      button_message_id VARCHAR(32),
+      staff_role VARCHAR(32),
+      ping_staff BOOLEAN DEFAULT FALSE,
+      UNIQUE KEY unique_ticket_type (guild_id, type_key)
+    )
+  `);
+
     await db.query(`
-      CREATE TABLE IF NOT EXISTS server_status (
-        server_id VARCHAR(32) NOT NULL,
-        last_heartbeat INT NOT NULL,
-        PRIMARY KEY (server_id)
-      )
-    `);
-    await db.query(`
-      CREATE TABLE IF NOT EXISTS invite_stats (
-        guild_id VARCHAR(64) NOT NULL,
-        inviter_id VARCHAR(64) NOT NULL,
-        inviter_tag VARCHAR(100) NOT NULL,
-        total_uses INT NOT NULL DEFAULT 0,
-        PRIMARY KEY (guild_id, inviter_id)
-      );
-    `);
-    await db.query(`
-      CREATE TABLE IF NOT EXISTS invite_logs (
-        guild_id VARCHAR(64) NOT NULL,
-        inviter_id VARCHAR(64) NOT NULL,
-        inviter_tag VARCHAR(100) NOT NULL,
-        user_id VARCHAR(64) NOT NULL,
-        user_tag VARCHAR(100) NOT NULL,
-        invite_code VARCHAR(32) NOT NULL,
-        join_date DATETIME NOT NULL,
+      CREATE TABLE IF NOT EXISTS referrals (
+        guild_id varchar(32) NOT NULL,
+        user_id varchar(32) NOT NULL,
+        referral_count int(11) DEFAULT 0,
         PRIMARY KEY (guild_id, user_id)
-      );
-    `);
-
-    // Create the table for voice channels if it doesn't exist
-    await db.query(`
-      CREATE TABLE IF NOT EXISTS created_voice_channels (
-        guild_id VARCHAR(255),
-        channel_id VARCHAR(255) PRIMARY KEY,
-        owner_id VARCHAR(255),
-        name VARCHAR(255)
       )
     `);
 
-    console.log("Database tables ensured.");
-  } catch (error) {
-    console.error("Error initializing database tables:", error);
-  }
-}
+    // Ensure server_status table
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS referral_uses (
+        guild_id varchar(32) NOT NULL,
+        referrer_id varchar(32) NOT NULL,
+        PRIMARY KEY (guild_id,referrer_id)
+      ) 
+  `);
 
-async function addExistingGuildsToDatabase(client) {
-  // Iterate over every guild the bot is in
-  client.guilds.cache.forEach(async (guild) => {
-    try {
-      // Check if the guild already has a record in ticket_settings
-      const [rows] = await db.query(
-        "SELECT guild_id FROM ticket_settings WHERE guild_id = ?",
-        [guild.id]
-      );
-      if (rows.length === 0) {
-        // Insert a new record with default values if none exists
-        await db.query(
-          "INSERT INTO ticket_settings (guild_id, ticket_category, transcript_channel) VALUES (?, ?, ?)",
-          [guild.id, "", ""]
-        );
-        console.log(`Guild ${guild.id} added to ticket_settings.`);
-      }
-    } catch (error) {
-      console.error(`Error processing guild ${guild.id}:`, error);
-    }
-  });
+    // Ensure invite_stats table
+    await db.query(`
+    CREATE TABLE IF NOT EXISTS invite_stats (
+      guild_id VARCHAR(64) NOT NULL,
+      inviter_id VARCHAR(64) NOT NULL,
+      inviter_tag VARCHAR(100) NOT NULL,
+      total_uses INT NOT NULL DEFAULT 0,
+      PRIMARY KEY (guild_id, inviter_id)
+    )
+  `);
+
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS main_voice_channels (
+        guild_id varchar(50) NOT NULL,
+        channel_id varchar(50) NOT NULL,
+        PRIMARY KEY (guild_id,channel_id)
+      )
+  `);
+
+    // Ensure invite_logs table
+    await db.query(`
+    CREATE TABLE IF NOT EXISTS invite_logs (
+      guild_id VARCHAR(64) NOT NULL,
+      inviter_id VARCHAR(64) NOT NULL,
+      inviter_tag VARCHAR(100) NOT NULL,
+      user_id VARCHAR(64) NOT NULL,
+      user_tag VARCHAR(100) NOT NULL,
+      invite_code VARCHAR(32) NOT NULL,
+      join_date DATETIME NOT NULL,
+      PRIMARY KEY (guild_id, user_id)
+    )
+  `);
+
+    // Ensure created_voice_channels table
+    await db.query(`
+    CREATE TABLE IF NOT EXISTS created_voice_channels (
+      guild_id VARCHAR(255),
+      channel_id VARCHAR(255) PRIMARY KEY,
+      owner_id VARCHAR(255),
+      name VARCHAR(255)
+    )
+  `);
+
+    console.log("✅ Database tables ensured.");
+  } catch (error) {
+    console.error("❌ Error initializing database tables:", error);
+  }
 }
 
 async function loadVoiceChannels(client) {
@@ -109,7 +115,9 @@ async function loadVoiceChannels(client) {
         owner: row.owner_id,
         name: row.name,
       });
-      console.log(`Loaded voice channel ${row.channel_id} for guild ${row.guild_id} from DB.`);
+      console.log(
+        `Loaded voice channel ${row.channel_id} for guild ${row.guild_id} from DB.`
+      );
     });
   } catch (error) {
     console.error("Error loading voice channels:", error);
@@ -124,9 +132,6 @@ module.exports = {
 
     // Initialize the database tables.
     await initializeDatabase();
-
-    // Auto-add existing guilds to the ticket_settings table.
-    await addExistingGuildsToDatabase(client);
 
     // Load existing voice channels into memory so they can be managed post-restart.
     await loadVoiceChannels(client);

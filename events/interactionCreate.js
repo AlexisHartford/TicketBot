@@ -1,12 +1,21 @@
-const { PermissionsBitField, ChannelType } = require("discord.js");
+const {
+  PermissionsBitField,
+  ChannelType,
+  AttachmentBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  StringSelectMenuBuilder,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
+} = require("discord.js");
 const mysql = require("mysql2/promise");
 const config = require("../config.json");
+const discordTranscripts = require("discord-html-transcripts");
 
-// At the top of the file, you can also initialize the sets if desired.
 if (!global.closingTickets) global.closingTickets = new Set();
-if (!global.closedChannels) global.closedChannels = new Set();
 
-// Create a MySQL pool (or import a shared instance if available)
 const db = mysql.createPool({
   host: config.mysql.host,
   user: config.mysql.user,
@@ -16,22 +25,6 @@ const db = mysql.createPool({
   connectionLimit: 10,
   queueLimit: 0,
 });
-
-// Helper function to fetch all messages from a channel.
-async function fetchAllMessages(channel) {
-  let allMessages = [];
-  let lastId;
-  while (true) {
-    const options = { limit: 100 };
-    if (lastId) options.before = lastId;
-    const messages = await channel.messages.fetch(options);
-    if (messages.size === 0) break;
-    allMessages = allMessages.concat(Array.from(messages.values()));
-    lastId = messages.last().id;
-    if (messages.size < 100) break;
-  }
-  return allMessages;
-}
 
 module.exports = {
   name: "interactionCreate",
@@ -52,222 +45,371 @@ module.exports = {
         console.error(`Error executing ${interaction.commandName}:`, error);
       }
     }
-    // Handle button interactions.
+
+    else if (interaction.isAutocomplete()) {
+      const command = interaction.client.commands.get(interaction.commandName);
+      if (command && command.autocomplete) {
+        try {
+          await command.autocomplete(interaction);
+        } catch (error) {
+          console.error("Autocomplete error:", error);
+        }
+      }
+    }
+
+    else if (interaction.isStringSelectMenu()) {
+      // Handle the select menu for existing button messages
+      if (interaction.customId === "select_button_message") {
+        // User selected an existing button message ID
+        const selectedMessageId = interaction.values[0];
+
+        // Create modal to collect the new ticket button details
+        const modal = new ModalBuilder()
+          .setCustomId(`add_ticket_button_modal_${selectedMessageId}`)
+          .setTitle("Add Ticket Button Details");
+
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("type_key")
+              .setLabel("Type Key (unique)")
+              .setStyle(TextInputStyle.Short)
+              .setRequired(true)
+          ),
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("label")
+              .setLabel("Button Label")
+              .setStyle(TextInputStyle.Short)
+              .setRequired(true)
+          ),
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("message")
+              .setLabel("Ticket Message")
+              .setStyle(TextInputStyle.Paragraph)
+              .setRequired(true)
+          ),
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("ticket_category")
+              .setLabel("Ticket Category Channel ID")
+              .setStyle(TextInputStyle.Short)
+              .setRequired(true)
+              .setPlaceholder("Enter category channel ID")
+          ),
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("transcript_channel")
+              .setLabel("Transcript Channel ID")
+              .setStyle(TextInputStyle.Short)
+              .setRequired(true)
+              .setPlaceholder("Enter transcript channel ID")
+          ),
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("staff_role")
+              .setLabel("Staff Role ID (optional)")
+              .setStyle(TextInputStyle.Short)
+              .setRequired(false)
+              .setPlaceholder("Enter staff role ID or leave empty")
+          ),
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("ping_staff")
+              .setLabel("Ping Staff? (true/false)")
+              .setStyle(TextInputStyle.Short)
+              .setRequired(true)
+              .setPlaceholder("true or false")
+          )
+        );
+
+        return interaction.showModal(modal);
+      }
+    }
+
+    else if (interaction.isModalSubmit()) {
+      // Handle the modal submit to add new ticket button to existing message
+      if (interaction.customId.startsWith("add_ticket_button_modal_")) {
+        const buttonMessageId = interaction.customId.replace(
+          "add_ticket_button_modal_",
+          ""
+        );
+        const guildId = interaction.guild.id;
+
+        // Extract modal inputs
+        const typeKey = interaction.fields.getTextInputValue("type_key");
+        const label = interaction.fields.getTextInputValue("label");
+        const messageText = interaction.fields.getTextInputValue("message");
+        const ticketCategoryId = interaction.fields.getTextInputValue("ticket_category");
+        const transcriptChannelId = interaction.fields.getTextInputValue("transcript_channel");
+        const staffRoleIdRaw = interaction.fields.getTextInputValue("staff_role");
+        const pingStaffRaw = interaction.fields.getTextInputValue("ping_staff");
+
+        const pingStaff = pingStaffRaw.toLowerCase() === "true";
+        const staffRoleId = staffRoleIdRaw.length > 0 ? staffRoleIdRaw : null;
+
+        try {
+          // Get button channel from DB for that message
+          const [rows] = await db.query(
+            `SELECT button_channel FROM ticket_types WHERE button_message_id = ? LIMIT 1`,
+            [buttonMessageId]
+          );
+
+          if (rows.length === 0) {
+            return interaction.reply({
+              content: "❌ Could not find the button channel for this message in the database.",
+              ephemeral: true,
+            });
+          }
+
+          const buttonChannelId = rows[0].button_channel;
+          const channel = await interaction.guild.channels.fetch(buttonChannelId);
+
+          if (!channel || channel.type !== ChannelType.GuildText) {
+            return interaction.reply({
+              content: "❌ Button channel is invalid or not a text channel.",
+              ephemeral: true,
+            });
+          }
+
+          const message = await channel.messages.fetch(buttonMessageId);
+
+          // Collect all buttons from message
+          let buttons = [];
+          for (const row of message.components) {
+            buttons = buttons.concat(row.components);
+          }
+
+          const customId = `create_ticket_${typeKey.toLowerCase()}`;
+
+          if (buttons.some((btn) => btn.customId === customId)) {
+            return interaction.reply({
+              content: `❌ A button with type key "${typeKey}" already exists.`,
+              ephemeral: true,
+            });
+          }
+
+          buttons.push(
+            new ButtonBuilder()
+              .setCustomId(customId)
+              .setLabel(label)
+              .setStyle(ButtonStyle.Primary)
+          );
+
+          // Rebuild action rows (max 5 buttons per row)
+          const actionRows = [];
+          for (let i = 0; i < buttons.length; i += 5) {
+            actionRows.push(new ActionRowBuilder().addComponents(buttons.slice(i, i + 5)));
+          }
+
+          await message.edit({ components: actionRows });
+
+          // Save to DB
+          await db.query(
+            `INSERT INTO ticket_types (
+              guild_id,
+              type_key,
+              label,
+              button_message,
+              ticket_category,
+              transcript_channel,
+              button_channel,
+              button_message_id,
+              staff_role,
+              ping_staff
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE
+              label = VALUES(label),
+              button_message = VALUES(button_message),
+              ticket_category = VALUES(ticket_category),
+              transcript_channel = VALUES(transcript_channel),
+              button_channel = VALUES(button_channel),
+              button_message_id = VALUES(button_message_id),
+              staff_role = VALUES(staff_role),
+              ping_staff = VALUES(ping_staff)`,
+            [
+              guildId,
+              typeKey,
+              messageText,
+              ticketCategoryId,
+              transcriptChannelId,
+              buttonChannelId,
+              buttonMessageId,
+              staffRoleId,
+              pingStaff,
+            ]
+          );
+
+          return interaction.reply({
+            content: `✅ Added new ticket button **${label}** to existing message.`,
+            ephemeral: true,
+          });
+        } catch (error) {
+          console.error("Error adding button to existing message:", error);
+          return interaction.reply({
+            content: "❌ Failed to add button to the existing message.",
+            ephemeral: true,
+          });
+        }
+      }
+    }
+
     else if (interaction.isButton()) {
       console.log(`Button pressed: ${interaction.customId}`);
 
-      // Handle ticket creation button.
-      if (interaction.customId === "createTicket") {
-        const guild = interaction.guild;
-        const user = interaction.user;
-        let categoryID;
-        let staffRoleID;
-        let pingStaff = false; // Default to false
+      // Handle dynamic ticket buttons
+      if (interaction.customId.startsWith("create_ticket_")) {
+        const ticketType = interaction.customId.replace("create_ticket_", "");
 
-        // Retrieve the designated ticket category, custom staff role, and ping_staff boolean from the database.
         try {
           const [rows] = await db.query(
-            "SELECT ticket_category, staff_role, ping_staff FROM ticket_settings WHERE guild_id = ?",
-            [guild.id]
+            "SELECT * FROM ticket_types WHERE guild_id = ? AND type_key = ?",
+            [interaction.guild.id, ticketType]
           );
-          if (rows.length > 0) {
-            categoryID = rows[0].ticket_category;
-            staffRoleID = rows[0].staff_role;
-            pingStaff = rows[0].ping_staff; // Boolean value: true means ping staff
-          }
-        } catch (error) {
-          console.error("Error fetching ticket settings:", error);
-        }
 
-        try {
-          // Step 1: Create the channel with category only — this syncs permissions
-          const ticketChannel = await guild.channels.create({
-            name: `ticket-${user.username}`.toLowerCase().replace(/[^a-z0-9-]/g, ""),
+          if (rows.length === 0) {
+            return interaction.reply({
+              content: "⚠️ Ticket type not configured properly.",
+              ephemeral: true,
+            });
+          }
+
+          const settings = rows[0];
+          const user = interaction.user;
+
+          const ticketChannel = await interaction.guild.channels.create({
+            name: `ticket-${ticketType}-${user.username}`
+              .toLowerCase()
+              .replace(/[^a-z0-9-]/g, ""),
             type: ChannelType.GuildText,
-            parent: categoryID || undefined, // Syncs perms if no permissionOverwrites are set
+            parent: settings.ticket_category || undefined,
           });
-        
-          // Step 2: Manually add the user after creation
+
           await ticketChannel.permissionOverwrites.edit(user.id, {
             ViewChannel: true,
             SendMessages: true,
             ReadMessageHistory: true,
           });
-        
-          // Step 3: Send the message
+
           const pingContent =
-            pingStaff && staffRoleID
-              ? `<@&${staffRoleID}> <@${user.id}>, your ticket has been created.`
-              : `<@${user.id}>, your ticket has been created.`;
-        
+            settings.ping_staff && settings.staff_role
+              ? `<@&${settings.staff_role}> <@${user.id}>, ${settings.button_message}`
+              : `<@${user.id}>, ${settings.button_message}`;
+
           await ticketChannel.send({ content: pingContent });
-        
+
           await interaction.reply({
-            content: `Your ticket has been created: ${ticketChannel}`,
-            flags: 64,
+            content: `✅ Your **${ticketType}** ticket has been created: ${ticketChannel}`,
+            ephemeral: true,
           });
         } catch (error) {
-          console.error("Error creating ticket channel:", error);
+          console.error("Ticket creation error:", error);
           await interaction.reply({
-            content: "There was an error creating your ticket channel.",
-            flags: 64,
+            content: "❌ Failed to create the ticket channel.",
+            ephemeral: true,
           });
         }
-        
-        
-      } else if (interaction.customId === "confirmClose") {
-        await interaction.deferReply({ ephemeral: true });
-        const guild = interaction.guild;
-        const ticketChannel = interaction.channel;
+      }
 
-        // Check if the channel has already been closed.
-        if (global.closedChannels.has(ticketChannel.id)) {
-          return interaction.editReply({
-            content: "Ticket has already been closed.",
-          });
-        }
-
-        // Prevent concurrent closing.
-        if (!global.closingTickets) global.closingTickets = new Set();
-        if (global.closingTickets.has(ticketChannel.id)) {
-          return interaction.editReply({
-            content: "Ticket close process is already in progress.",
-          });
-        }
-        global.closingTickets.add(ticketChannel.id);
-
+      // Handle closing the ticket
+      else if (interaction.customId === "confirmClose") {
         try {
-          // Lock the channel so no one can type in it.
-          await ticketChannel.permissionOverwrites.edit(
-            guild.roles.everyone.id,
-            { [PermissionsBitField.Flags.SendMessages]: false }
-          );
+          const guild = interaction.guild;
+          const channel = interaction.channel;
 
-          // Fetch all messages from the current channel.
-          const allMessages = await fetchAllMessages(ticketChannel);
-          const sortedMessages = allMessages.sort(
-            (a, b) => a.createdTimestamp - b.createdTimestamp
-          );
-          let transcript = "";
-          sortedMessages.forEach((msg) => {
-            transcript += `[${new Date(
-              msg.createdTimestamp
-            ).toLocaleString()}] ${msg.author.tag}: ${msg.content}\n`;
-          });
-
-          const transcriptBuffer = Buffer.from(transcript, "utf8");
-
-          // Retrieve the transcript channel from the database.
-          let transcriptChannelID;
-          try {
-            const [rows] = await db.query(
-              "SELECT transcript_channel FROM ticket_settings WHERE guild_id = ?",
-              [guild.id]
-            );
-            if (rows.length > 0 && rows[0].transcript_channel) {
-              transcriptChannelID = rows[0].transcript_channel;
-            }
-          } catch (error) {
-            console.error("Error fetching transcript channel:", error);
-          }
-
-          if (!transcriptChannelID) {
-            await interaction.editReply({
-              content: "Transcript channel is not set up.",
+          // Extract ticket type from the channel name, e.g. "ticket-support-username"
+          const ticketTypeMatch = channel.name.match(/^ticket-([^-]+)-/);
+          if (!ticketTypeMatch) {
+            return interaction.reply({
+              content: "⚠️ Could not identify ticket type from channel name.",
+              ephemeral: true,
             });
-            global.closingTickets.delete(ticketChannel.id);
-            return;
+          }
+          const ticketType = ticketTypeMatch[1];
+
+          // Query ticket_types table to get the transcript_channel for this guild and ticket type
+          const [rows] = await db.query(
+            `SELECT transcript_channel FROM ticket_types WHERE guild_id = ? AND type_key = ?`,
+            [guild.id, ticketType]
+          );
+
+          if (rows.length === 0) {
+            return interaction.reply({
+              content:
+                "❌ Transcript channel not configured for this ticket type.",
+              ephemeral: true,
+            });
           }
 
+          const transcriptChannelID = rows[0].transcript_channel;
           const transcriptChannel =
             guild.channels.cache.get(transcriptChannelID);
-          if (!transcriptChannel) {
-            await interaction.editReply({
-              content: "Transcript channel not found.",
+
+          // Create the transcript attachment
+          const transcript = await discordTranscripts.createTranscript(
+            channel,
+            {
+              limit: -1,
+              returnType: "attachment",
+              fileName: `${channel.name}_transcript.html`,
+              poweredBy: false,
+              footerText: "Exported {number} message{s}",
+            }
+          );
+
+          // Send transcript to transcript channel
+          if (transcriptChannel) {
+            await transcriptChannel.send({
+              content: `📝 Transcript for ${channel.name}`,
+              files: [transcript],
             });
-            global.closingTickets.delete(ticketChannel.id);
-            return;
+          } else {
+            console.warn("Transcript channel not found.");
           }
 
-          // Send the transcript text file to the transcript channel.
-          await transcriptChannel.send({
-            content: `Transcript for ticket channel ${ticketChannel.name}:`,
-            files: [{ attachment: transcriptBuffer, name: "transcript.txt" }],
+          // DM transcript to users with view permissions (non-bots)
+          const membersToDM = [];
+          channel.permissionOverwrites.cache.forEach((overwrite) => {
+            if (
+              overwrite.type === 1 && // member overwrite
+              overwrite.id !== interaction.client.user.id
+            ) {
+              const member = guild.members.cache.get(overwrite.id);
+              if (member && !member.user.bot) {
+                membersToDM.push(member);
+              }
+            }
           });
 
-          // Retrieve the ticket creator's ID from the first message's mentions.
-          let ticketCreatorId;
-          const firstMessage = sortedMessages[0];
-          if (firstMessage) {
-            const mentionedUser = firstMessage.mentions.users.first();
-            if (mentionedUser) {
-              ticketCreatorId = mentionedUser.id;
-            }
-          }
-
-          // Send the transcript to all members of the ticket
-          if (ticketCreatorId) {
+          for (const member of membersToDM) {
             try {
-              const ticketCreator = await guild.members.fetch(ticketCreatorId);
-              if (ticketCreator) {
-                await ticketCreator.send({
-                  content: `Here is the transcript for your ticket channel ${ticketChannel.name}:`,
-                  files: [
-                    { attachment: transcriptBuffer, name: "transcript.txt" },
-                  ],
-                });
-              }
-            } catch (error) {
-              console.error("Error sending DM transcript to ticket creator:", error);
+              await member.send({
+                content: `📝 Transcript for your closed ticket: **${channel.name}**`,
+                files: [transcript],
+              });
+              console.log(
+                `✅ Sent transcript to ${member.user.tag} (${member.id})`
+              );
+            } catch (dmErr) {
+              console.warn(
+                `❌ Could not DM ${member.user.tag} (${member.id}):`,
+                dmErr.message
+              );
             }
           }
 
-          // Re-fetch the channel to get updated permission overwrites
-          const freshChannel = await guild.channels.fetch(ticketChannel.id);
-          const memberOverrides =
-            freshChannel.permissionOverwrites.cache.filter(
-              (ow) => ow.type === "member"
-            );
+          await channel.send(
+            "✅ Transcript saved and sent. Closing this ticket..."
+          );
+          await channel.send("Ticket successfully closed and archived.");
 
-          // Iterate over each member override
-          for (const overwrite of memberOverrides.values()) {
-            if (overwrite.id !== ticketCreatorId) {
-              try {
-                const member = await guild.members.fetch(overwrite.id);
-                if (member) {
-                  await member.send({
-                    content: `Here is the transcript for ticket channel ${ticketChannel.name}:`,
-                    files: [
-                      { attachment: transcriptBuffer, name: "transcript.txt" },
-                    ],
-                  });
-                }
-              } catch (error) {
-                console.error(
-                  `Error sending transcript to user with ID ${overwrite.id}:`,
-                  error
-                );
-              }
-            }
-          }
-
-          // Mark the channel as closed so that further commands are blocked.
-          global.closedChannels.add(ticketChannel.id);
-
-          await interaction.editReply({
-            content: "Ticket closed and transcript saved.",
-          });
-
-          // Delete the channel after a short delay.
           setTimeout(() => {
-            ticketChannel.delete().catch(console.error);
+            channel.delete().catch(console.error);
           }, 5000);
-        } catch (error) {
-          global.closingTickets.delete(ticketChannel.id);
-          console.error("Error closing ticket and saving transcript:", error);
-          await interaction.editReply({
-            content: "There was an error closing the ticket.",
-          });
+        } catch (err) {
+          console.error("Transcript or close error:", err);
+          await interaction.channel.send("⚠️ Failed to close the ticket.");
         }
       }
     }

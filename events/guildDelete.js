@@ -16,10 +16,14 @@ module.exports = {
     });
     try {
       // Remove the guild from the ticket_settings table.
-      await db.query("DELETE FROM ticket_settings WHERE guild_id = ?", [guild.id]);
-      console.log(`Guild ${guild.id} removed from ticket_settings.`);
+      await db.query("DELETE FROM created_voice_channels WHERE guild_id = ?", [guild.id]);
+      await db.query("DELETE FROM main_voice_channels WHERE guild_id = ?", [guild.id]);
+      await db.query("DELETE FROM referrals WHERE guild_id = ?", [guild.id]);
+      await db.query("DELETE FROM referral_uses WHERE guild_id = ?", [guild.id]);
+      await db.query("DELETE FROM ticket_types WHERE guild_id = ?", [guild.id]);
+      console.log(`Guild ${guild.id} removed from Database.`);
     } catch (error) {
-      console.error(`Error removing guild ${guild.id} from ticket_settings:`, error);
+      console.error(`Error removing guild ${guild.id} from Database:`, error);
     }
   },
 };
