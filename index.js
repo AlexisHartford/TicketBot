@@ -176,7 +176,7 @@ async function checkForUpdate() {
     console.log("🚀 New update detected on branch:", config.branch);
     console.log("📥 Pulling latest version from GitHub...");
 
-    exec(`git fetch origin ${config.branch} && git reset --hard origin/${config.branch} && npm install`, (err, stdout, stderr) => {
+    exec(`rm -f .git/index.lock && git fetch origin ${config.branch} && git reset --hard origin/${config.branch} && npm install`, (err, stdout, stderr) => {
       if (err) {
         console.error("❌ Update failed:", stderr || err.message);
         return;
