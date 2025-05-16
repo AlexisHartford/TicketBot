@@ -52,10 +52,10 @@ const registeredEvents = new Set();
 
 // Command and event loader
 function registerCommandsAndEvents(client) {
-  client.command
+  client.commands = new Collection();
+  
   // Clear registeredEvents so you can reload cleanly
   registeredEvents.clear();
-
 
   const foldersPath = path.join(__dirname, "commands");
   const commandFolders = fs.readdirSync(foldersPath);
