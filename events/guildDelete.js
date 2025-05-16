@@ -3,6 +3,7 @@ const config = require("../config.json");
 
 module.exports = {
   name: "guildDelete",
+  once: true,  
   async execute(guild) {
     // Create a MySQL pool
     const db = mysql.createPool({

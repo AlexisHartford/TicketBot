@@ -28,6 +28,7 @@ const db = mysql.createPool({
 
 module.exports = {
   name: "interactionCreate",
+  once: true,  
   async execute(interaction) {
     if (!interaction.guild) {
       return interaction.reply({
