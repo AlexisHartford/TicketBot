@@ -3,6 +3,7 @@ const pool = require("../database"); // Adjust the path based on your file struc
 
 module.exports = {
   name: "voiceStateUpdate",
+  once: true,  
   async execute(oldState, newState) {
     console.log("voiceStateUpdate event triggered");
 

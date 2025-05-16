@@ -26,6 +26,7 @@ const db = mysql.createPool({
 
 let discordClient = null;
 let botActive = false;
+let activating = false;  // <-- Prevent multiple activateBot runs
 let lastHeartbeatTimestamp = 0;
 
 // Heartbeat
@@ -52,9 +53,11 @@ const registeredEvents = new Set();
 
 // Command and event loader
 function registerCommandsAndEvents(client) {
+  // Clear existing listeners and commands to avoid duplicates on reloads
+  if (client.commands) client.commands.clear();
+  client.removeAllListeners();
+
   client.commands = new Collection();
-  
-  // Clear registeredEvents so you can reload cleanly
   registeredEvents.clear();
 
   const foldersPath = path.join(__dirname, "commands");
@@ -98,8 +101,10 @@ function registerCommandsAndEvents(client) {
 
 // Bot start/stop
 async function activateBot() {
-  if (botActive) return;
+  if (botActive || activating) return;
+  activating = true;
   console.log("Activating bot...");
+
   discordClient = new Client({
     intents: [
       GatewayIntentBits.Guilds,
@@ -121,6 +126,7 @@ async function activateBot() {
   } catch (error) {
     console.error("Login error:", error);
   }
+  activating = false;
 }
 
 async function deactivateBot() {
@@ -144,6 +150,8 @@ async function checkFailoverStatus() {
       "SELECT server_id, last_heartbeat FROM server_status WHERE server_id < ?",
       [config.server_id]
     );
+    // Debug log
+    // console.log("Failover check rows:", rows);
     return rows.some((row) => currentTime - row.last_heartbeat <= 5);
   } catch (error) {
     console.error("Failover check failed:", error);
@@ -152,11 +160,17 @@ async function checkFailoverStatus() {
 }
 
 async function checkAndToggleBot() {
-  const otherActive = await checkFailoverStatus();
-  if (otherActive && botActive) {
-    await deactivateBot();
-  } else if (!otherActive && !botActive) {
-    await activateBot();
+  try {
+    const otherActive = await checkFailoverStatus();
+    if (otherActive && botActive) {
+      console.log("Another bot is active. Deactivating this bot.");
+      await deactivateBot();
+    } else if (!otherActive && !botActive) {
+      console.log("No other active bot found. Activating this bot.");
+      await activateBot();
+    }
+  } catch (error) {
+    console.error("Error in failover toggle:", error);
   }
 }
 
@@ -179,28 +193,34 @@ async function checkForUpdate() {
     console.log("🚀 New update detected on branch:", config.branch);
     console.log("📥 Pulling latest version from GitHub...");
 
-    exec('find .git -type f -name "*.lock" -delete && git fetch origin ' + config.branch + ' && git reset --hard origin/' + config.branch + ' && npm install', (err, stdout, stderr) => {
-      if (err) {
-        console.error("❌ Update failed:", stderr || err.message);
-        return;
+    exec(
+      'find .git -type f -name "*.lock" -delete && git fetch origin ' +
+        config.branch +
+        " && git reset --hard origin/" +
+        config.branch +
+        " && npm install",
+      (err, stdout, stderr) => {
+        if (err) {
+          console.error("❌ Update failed:", stderr || err.message);
+          return;
+        }
+
+        // Save new commit hash
+        fs.writeFileSync("./version.json", JSON.stringify({ commit: latest }, null, 2));
+        console.log("✅ Update successful. Restarting bot...");
+        process.exit(0); // Optional: let host auto-restart
       }
-
-      // Save new commit hash
-      fs.writeFileSync("./version.json", JSON.stringify({ commit: latest }, null, 2));
-      console.log("✅ Update successful. Restarting bot...");
-      process.exit(0); // Optional: let host auto-restart
-    });
-
+    );
   } catch (error) {
     console.error("❌ Update check failed:", error.message);
   }
 }
 
-
-
 // Express routes
 app.get("/auth", (req, res) => {
-  res.redirect("https://discord.com/api/oauth2/authorize?client_id=1348418225880301622&redirect_uri=https://ticket.galaxyvr.net/dashboard.html&response_type=token&scope=identify%20guilds");
+  res.redirect(
+    "https://discord.com/api/oauth2/authorize?client_id=1348418225880301622&redirect_uri=https://ticket.galaxyvr.net/dashboard.html&response_type=token&scope=identify%20guilds"
+  );
 });
 
 app.get("/api/invite-url", (req, res) => {
@@ -215,7 +235,7 @@ app.get("/api/invite-url", (req, res) => {
 app.get("/api/ticket_types", async (req, res) => {
   try {
     const [rows] = await db.query("SELECT guild_id FROM ticket_types");
-    res.json(rows.map(r => String(r.guild_id)));
+    res.json(rows.map((r) => String(r.guild_id)));
   } catch (err) {
     console.error("Ticket settings error:", err);
     res.status(500).json({ error: "DB error" });
@@ -240,7 +260,7 @@ process.on("SIGINT", () => {
   appStatus = 0;
   clearInterval(heartbeatInterval);
   clearInterval(failoverInterval);
-  // clearInterval(updateCheckInterval);
+  clearInterval(updateCheckInterval);
   if (discordClient) {
     discordClient.destroy().then(() => process.exit(0));
   } else {
