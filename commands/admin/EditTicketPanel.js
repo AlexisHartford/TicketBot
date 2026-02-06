@@ -9,6 +9,7 @@ const {
   TextInputBuilder,
   TextInputStyle,
   ChannelType,
+  PermissionFlagsBits,
 } = require("discord.js");
 
 function safeTruncate(str, max) {
