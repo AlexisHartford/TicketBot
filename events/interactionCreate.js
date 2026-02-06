@@ -46,6 +46,14 @@ module.exports = {
         console.error(`Error executing ${interaction.commandName}:`, error);
       }
     }
+    
+    // ✅ Message context menu commands (RIGHT-CLICK -> Apps)
+    if (interaction.isMessageContextMenuCommand()) {
+      const cmd = client.commands.get(interaction.commandName);
+      if (!cmd) return;
+      await cmd.execute(interaction);
+      return;
+    }
 
     else if (interaction.isAutocomplete()) {
       const command = interaction.client.commands.get(interaction.commandName);
