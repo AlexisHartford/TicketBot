@@ -1,6 +1,7 @@
 const {
   ContextMenuCommandBuilder,
   ApplicationCommandType,
+  PermissionFlagsBits,
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
@@ -9,43 +10,49 @@ const {
   TextInputBuilder,
   TextInputStyle,
   ChannelType,
-  PermissionFlagsBits,
 } = require("discord.js");
 
-function safeTruncate(str, max) {
-  if (!str) return "";
-  str = String(str);
-  return str.length > max ? str.slice(0, max) : str;
-}
+const mysql = require("mysql2/promise");
+const config = require("../../config.json");
 
-function cloneComponents(message) {
+const db = mysql.createPool({
+  host: config.mysql.host,
+  user: config.mysql.user,
+  password: config.mysql.password,
+  database: config.mysql.database,
+});
+
+function cloneRows(message) {
   const rows = [];
   for (const row of message.components ?? []) {
-    const newRow = new ActionRowBuilder();
+    const r = new ActionRowBuilder();
     for (const c of row.components) {
-      if (c.type === 2) newRow.addComponents(ButtonBuilder.from(c));
+      if (c.type === 2) r.addComponents(ButtonBuilder.from(c));
     }
-    if (newRow.components.length) rows.push(newRow);
+    if (r.components.length) rows.push(r);
   }
   return rows;
 }
 
-function getEmbedSnapshot(message) {
-  const e = message.embeds?.[0];
-  return { title: e?.title ?? "", description: e?.description ?? "", color: e?.color ?? null };
+function flatten(rows) {
+  const out = [];
+  for (let r = 0; r < rows.length; r++) {
+    for (let i = 0; i < rows[r].components.length; i++) {
+      const b = rows[r].components[i];
+      out.push({
+        row: r,
+        index: i,
+        label: b.data?.label ?? "no label",
+        customId: b.data?.custom_id ?? "",
+      });
+    }
+  }
+  return out;
 }
 
-function rebuildEmbed(message, { title, description }) {
-  const e = message.embeds?.[0];
-  const color = e?.color ?? null;
-
-  const embed = {
-    title: title?.trim() ? title.trim() : null,
-    description: description?.trim() ? description.trim() : null,
-  };
-  if (color != null) embed.color = color;
-  Object.keys(embed).forEach((k) => embed[k] == null && delete embed[k]);
-  return embed;
+function getTypeKey(id) {
+  if (!id?.startsWith("create_ticket_")) return null;
+  return id.slice("create_ticket_".length);
 }
 
 module.exports = {
@@ -55,220 +62,185 @@ module.exports = {
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
   async execute(interaction) {
-    // ✅ This is the message you right-clicked
-    const targetMessage = interaction.targetMessage;
+    if (!interaction.memberPermissions.has(PermissionFlagsBits.Administrator))
+      return interaction.reply({ content: "Admins only.", ephemeral: true });
 
-    await interaction.deferReply({ ephemeral: true });
+    const msg = interaction.targetMessage;
+    let rows = cloneRows(msg);
+    if (!rows.length)
+      return interaction.reply({ content: "No buttons on this message.", ephemeral: true });
 
-    const componentRows = cloneComponents(targetMessage);
-    if (!componentRows.length) return interaction.editReply("That message has no buttons to edit.");
+    let buttons = flatten(rows);
+    let selected = 0;
 
-    const embedSnap = getEmbedSnapshot(targetMessage);
-
-    const buttonsFlat = [];
-    for (let r = 0; r < componentRows.length; r++) {
-      const row = componentRows[r];
-      for (let i = 0; i < row.components.length; i++) {
-        const b = row.components[i];
-        buttonsFlat.push({
-          rowIndex: r,
-          index: i,
-          label: b.data?.label ?? "(no label)",
-          customId: b.data?.custom_id ?? "",
-        });
-      }
+    async function getPing(typeKey) {
+      const [r] = await db.query(
+        "SELECT ping_staff FROM ticket_types WHERE guild_id=? AND type_key=? LIMIT 1",
+        [interaction.guild.id, typeKey]
+      );
+      return r[0]?.ping_staff ? true : false;
     }
 
-    const select = new StringSelectMenuBuilder()
-      .setCustomId("editticket_select_button")
-      .setPlaceholder("Pick a button to rename")
-      .addOptions(
-        buttonsFlat.slice(0, 25).map((b, idx) => ({
-          label: safeTruncate(b.label || "Unnamed Button", 100),
-          description: safeTruncate(b.customId || `row ${b.rowIndex + 1} / pos ${b.index + 1}`, 100),
-          value: String(idx),
-        }))
-      );
-
-    const rowSelect = new ActionRowBuilder().addComponents(select);
-
-    const editPanelBtn = new ButtonBuilder()
-      .setCustomId("editticket_edit_panel")
-      .setLabel("Edit Panel Settings")
-      .setStyle(ButtonStyle.Secondary);
-
-    const saveBtn = new ButtonBuilder()
-      .setCustomId("editticket_save")
-      .setLabel("Save Changes")
-      .setStyle(ButtonStyle.Success);
-
-    const cancelBtn = new ButtonBuilder()
-      .setCustomId("editticket_cancel")
-      .setLabel("Cancel")
-      .setStyle(ButtonStyle.Danger);
-
-    const rowButtons = new ActionRowBuilder().addComponents(editPanelBtn, saveBtn, cancelBtn);
-
-    let working = {
-      embedTitle: embedSnap.title,
-      embedDescription: embedSnap.description,
-      ticketCategoryId: "",
-      transcriptChannelId: "",
-      rows: componentRows,
-      selectedButtonIdx: null,
+    let ping = false;
+    const loadPing = async () => {
+      const tk = getTypeKey(buttons[selected]?.customId);
+      ping = tk ? await getPing(tk) : false;
     };
 
-    await interaction.editReply({
-      content:
-        `Editing this panel:\n` +
-        `• Channel: <#${targetMessage.channelId}>\n` +
-        `• Message ID: **${targetMessage.id}**\n`,
-      components: [rowSelect, rowButtons],
+    await loadPing();
+
+    const buildSelect = () =>
+      new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId("etp_select")
+          .setPlaceholder("Select ticket button")
+          .addOptions(
+            buttons.map((b, i) => ({
+              label: b.label,
+              description: b.customId,
+              value: String(i),
+              default: i === selected,
+            }))
+          )
+      );
+
+    const buildButtons = () =>
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId("etp_edit")
+          .setLabel("Edit Button Settings")
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId("etp_ping")
+          .setLabel(`Ping: ${ping ? "ON" : "OFF"}`)
+          .setStyle(ping ? ButtonStyle.Success : ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId("etp_close")
+          .setLabel("Close")
+          .setStyle(ButtonStyle.Danger)
+      );
+
+    await interaction.reply({
+      ephemeral: true,
+      content: `Editing ticket buttons for message **${msg.id}**`,
+      components: [buildSelect(), buildButtons()],
     });
 
-    const msg = await interaction.fetchReply();
-    const collector = msg.createMessageComponentCollector({
-      time: 10 * 60 * 1000,
+    const ui = await interaction.fetchReply();
+
+    const col = ui.createMessageComponentCollector({
+      time: 600000,
       filter: (i) => i.user.id === interaction.user.id,
     });
 
-    collector.on("collect", async (i) => {
-      if (i.isStringSelectMenu() && i.customId === "editticket_select_button") {
-        working.selectedButtonIdx = Number(i.values[0]);
-        const b = buttonsFlat[working.selectedButtonIdx];
-
-        const modal = new ModalBuilder()
-          .setCustomId("editticket_modal_button")
-          .setTitle("Edit Button Label");
-
-        const labelInput = new TextInputBuilder()
-          .setCustomId("label")
-          .setLabel("Button Label")
-          .setStyle(TextInputStyle.Short)
-          .setRequired(true)
-          .setMaxLength(80)
-          .setValue(safeTruncate(b.label ?? "", 80));
-
-        modal.addComponents(new ActionRowBuilder().addComponents(labelInput));
-        return i.showModal(modal);
-      }
-
-      if (i.isButton() && i.customId === "editticket_edit_panel") {
-        const modal = new ModalBuilder()
-          .setCustomId("editticket_modal_panel")
-          .setTitle("Edit Panel Settings");
-
-        const titleInput = new TextInputBuilder()
-          .setCustomId("title")
-          .setLabel("Panel Title")
-          .setStyle(TextInputStyle.Short)
-          .setRequired(false)
-          .setMaxLength(256)
-          .setValue(safeTruncate(working.embedTitle ?? "", 256));
-
-        const descInput = new TextInputBuilder()
-          .setCustomId("desc")
-          .setLabel("Panel Message (Description)")
-          .setStyle(TextInputStyle.Paragraph)
-          .setRequired(false)
-          .setMaxLength(4000)
-          .setValue(safeTruncate(working.embedDescription ?? "", 4000));
-
-        const catInput = new TextInputBuilder()
-          .setCustomId("category")
-          .setLabel("Ticket Category ID")
-          .setStyle(TextInputStyle.Short)
-          .setRequired(false)
-          .setMaxLength(32)
-          .setValue(safeTruncate(working.ticketCategoryId ?? "", 32));
-
-        const transcriptInput = new TextInputBuilder()
-          .setCustomId("transcript")
-          .setLabel("Transcript Channel ID")
-          .setStyle(TextInputStyle.Short)
-          .setRequired(false)
-          .setMaxLength(32)
-          .setValue(safeTruncate(working.transcriptChannelId ?? "", 32));
-
-        modal.addComponents(
-          new ActionRowBuilder().addComponents(titleInput),
-          new ActionRowBuilder().addComponents(descInput),
-          new ActionRowBuilder().addComponents(catInput),
-          new ActionRowBuilder().addComponents(transcriptInput)
-        );
-
-        return i.showModal(modal);
-      }
-
-      if (i.isButton() && i.customId === "editticket_cancel") {
-        collector.stop("cancelled");
-        return i.update({ content: "Cancelled.", components: [] });
-      }
-
-      if (i.isButton() && i.customId === "editticket_save") {
-        if (working.ticketCategoryId) {
-          const cat = await interaction.guild.channels.fetch(working.ticketCategoryId).catch(() => null);
-          if (!cat || cat.type !== ChannelType.GuildCategory) {
-            return i.reply({ ephemeral: true, content: "Ticket Category ID is not a valid category channel." });
-          }
-        }
-        if (working.transcriptChannelId) {
-          const ch = await interaction.guild.channels.fetch(working.transcriptChannelId).catch(() => null);
-          if (!ch || !ch.isTextBased()) {
-            return i.reply({ ephemeral: true, content: "Transcript Channel ID is not a valid text channel." });
-          }
-        }
-
-        const newEmbed = rebuildEmbed(targetMessage, {
-          title: working.embedTitle,
-          description: working.embedDescription,
-        });
-
-        await targetMessage.edit({ embeds: [newEmbed], components: working.rows });
-
-        collector.stop("saved");
-        return i.update({ content: "✅ Saved changes to the ticket panel.", components: [] });
-      }
-    });
-
-    // Modal submit handler: easiest is to handle globally in your interactionCreate (recommended),
-    // but here's a local handler pattern:
-    const modalHandler = async (modalI) => {
-      if (!modalI.isModalSubmit()) return;
-      if (modalI.user.id !== interaction.user.id) return;
-
-      if (modalI.customId === "editticket_modal_button") {
-        const idx = working.selectedButtonIdx;
-        if (idx == null) return modalI.reply({ ephemeral: true, content: "No button selected." });
-
-        const newLabel = modalI.fields.getTextInputValue("label")?.trim();
-        if (!newLabel) return modalI.reply({ ephemeral: true, content: "Label can’t be empty." });
-
-        const b = buttonsFlat[idx];
-        working.rows[b.rowIndex].components[b.index].setLabel(newLabel);
-        buttonsFlat[idx].label = newLabel;
-
-        return modalI.reply({ ephemeral: true, content: `Updated button label to: **${newLabel}**` });
-      }
-
-      if (modalI.customId === "editticket_modal_panel") {
-        working.embedTitle = modalI.fields.getTextInputValue("title") ?? "";
-        working.embedDescription = modalI.fields.getTextInputValue("desc") ?? "";
-        working.ticketCategoryId = (modalI.fields.getTextInputValue("category") ?? "").trim();
-        working.transcriptChannelId = (modalI.fields.getTextInputValue("transcript") ?? "").trim();
-
-        return modalI.reply({ ephemeral: true, content: "Updated panel settings (not saved yet)." });
-      }
-    };
-
-    interaction.client.on("interactionCreate", modalHandler);
-
-    collector.on("end", async () => {
-      interaction.client.off("interactionCreate", modalHandler);
+    col.on("collect", async (i) => {
       try {
-        if (!interaction.replied) return;
-        // If session expired, clear UI
-      } catch {}
+        if (i.isStringSelectMenu()) {
+          selected = Number(i.values[0]);
+          await loadPing();
+          return i.update({ components: [buildSelect(), buildButtons()] });
+        }
+
+        if (i.customId === "etp_close") {
+          col.stop();
+          return i.update({ content: "Closed.", components: [] });
+        }
+
+        if (i.customId === "etp_ping") {
+          const tk = getTypeKey(buttons[selected].customId);
+          if (!tk) return i.reply({ ephemeral: true, content: "Not a ticket button." });
+          ping = !ping;
+          await db.query(
+            "UPDATE ticket_types SET ping_staff=? WHERE guild_id=? AND type_key=?",
+            [ping ? 1 : 0, interaction.guild.id, tk]
+          );
+          return i.update({ components: [buildSelect(), buildButtons()] });
+        }
+
+        if (i.customId === "etp_edit") {
+          const tk = getTypeKey(buttons[selected].customId);
+          if (!tk) return i.reply({ ephemeral: true, content: "Not a ticket button." });
+
+          const [r] = await db.query(
+            "SELECT * FROM ticket_types WHERE guild_id=? AND type_key=? LIMIT 1",
+            [interaction.guild.id, tk]
+          );
+          const cur = r[0] || {};
+
+          const modal = new ModalBuilder()
+            .setCustomId(`etp_modal_${tk}`)
+            .setTitle(`Edit ${tk}`);
+
+          modal.addComponents(
+            new ActionRowBuilder().addComponents(
+              new TextInputBuilder().setCustomId("label").setLabel("Label").setStyle(TextInputStyle.Short)
+                .setRequired(true).setValue(cur.label ?? buttons[selected].label)
+            ),
+            new ActionRowBuilder().addComponents(
+              new TextInputBuilder().setCustomId("msg").setLabel("Ticket Message")
+                .setStyle(TextInputStyle.Paragraph).setRequired(true)
+                .setValue(cur.button_message ?? "")
+            ),
+            new ActionRowBuilder().addComponents(
+              new TextInputBuilder().setCustomId("cat").setLabel("Category ID")
+                .setStyle(TextInputStyle.Short).setRequired(true)
+                .setValue(cur.ticket_category ?? "")
+            ),
+            new ActionRowBuilder().addComponents(
+              new TextInputBuilder().setCustomId("trans").setLabel("Transcript Channel ID")
+                .setStyle(TextInputStyle.Short).setRequired(true)
+                .setValue(cur.transcript_channel ?? "")
+            ),
+            new ActionRowBuilder().addComponents(
+              new TextInputBuilder().setCustomId("role").setLabel("Staff Role ID")
+                .setStyle(TextInputStyle.Short).setRequired(false)
+                .setValue(cur.staff_role ?? "")
+            )
+          );
+
+          await i.showModal(modal);
+
+          const sub = await i.awaitModalSubmit({
+            time: 300000,
+            filter: (m) => m.user.id === interaction.user.id,
+          }).catch(() => null);
+          if (!sub) return;
+
+          const label = sub.fields.getTextInputValue("label");
+          const msgTxt = sub.fields.getTextInputValue("msg");
+          const cat = sub.fields.getTextInputValue("cat");
+          const trans = sub.fields.getTextInputValue("trans");
+          const role = sub.fields.getTextInputValue("role") || null;
+
+          await db.query(
+            `INSERT INTO ticket_types
+            (guild_id,type_key,label,button_message,ticket_category,transcript_channel,button_channel,button_message_id,staff_role,ping_staff)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
+            ON DUPLICATE KEY UPDATE
+              label=VALUES(label),
+              button_message=VALUES(button_message),
+              ticket_category=VALUES(ticket_category),
+              transcript_channel=VALUES(transcript_channel),
+              staff_role=VALUES(staff_role),
+              ping_staff=VALUES(ping_staff)`,
+            [
+              interaction.guild.id, tk, label, msgTxt, cat, trans,
+              msg.channelId, msg.id, role, ping ? 1 : 0
+            ]
+          );
+
+          // update label live
+          rows[buttons[selected].row].components[buttons[selected].index].setLabel(label);
+          await msg.edit({ components: rows });
+
+          buttons = flatten(rows);
+          await sub.reply({ ephemeral: true, content: "✅ Updated." });
+          return interaction.editReply({ components: [buildSelect(), buildButtons()] });
+        }
+      } catch (e) {
+        console.error("EditTicketPanel error:", e);
+        i.reply({ ephemeral: true, content: "Error." }).catch(()=>{});
+      }
     });
   },
 };
