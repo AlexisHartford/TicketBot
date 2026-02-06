@@ -28,7 +28,7 @@ const db = mysql.createPool({
 
 module.exports = {
   name: "interactionCreate",
-  once: false,  
+  once: false,
   async execute(interaction) {
     if (!interaction.guild) {
       return interaction.reply({
@@ -46,14 +46,24 @@ module.exports = {
         console.error(`Error executing ${interaction.commandName}:`, error);
       }
     }
-    
+
     // ✅ Message context menu commands (RIGHT-CLICK -> Apps)
-    if (interaction.isMessageContextMenuCommand()) {
-      const cmd = client.commands.get(interaction.commandName);
+    else if (interaction.isMessageContextMenuCommand()) {
+      const cmd = interaction.client.commands.get(interaction.commandName);
       if (!cmd) return;
-      await cmd.execute(interaction);
+      try {
+        await cmd.execute(interaction);
+      } catch (error) {
+        console.error(`Error executing context menu ${interaction.commandName}:`, error);
+        if (interaction.deferred || interaction.replied) {
+          await interaction.followUp({ content: "❌ Something went wrong.", ephemeral: true }).catch(() => { });
+        } else {
+          await interaction.reply({ content: "❌ Something went wrong.", ephemeral: true }).catch(() => { });
+        }
+      }
       return;
     }
+
 
     else if (interaction.isAutocomplete()) {
       const command = interaction.client.commands.get(interaction.commandName);
