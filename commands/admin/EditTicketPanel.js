@@ -50,7 +50,8 @@ function rebuildEmbed(message, { title, description }) {
 module.exports = {
   data: new ContextMenuCommandBuilder()
     .setName("Edit Ticket Panel")
-    .setType(ApplicationCommandType.Message),
+    .setType(ApplicationCommandType.Message)
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
   async execute(interaction) {
     // ✅ This is the message you right-clicked
